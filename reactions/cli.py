@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
+from reactions import paths
 from reactions.blocker import ProfileBlocker
 from reactions.browser import (
     ReactionScraper,
@@ -19,6 +20,16 @@ from reactions.storage import SQLiteStore
 VALID_REACTIONS = set(REACTION_LABELS) | {"all", "unknown"}
 
 
+def _resolve_db_path(value: str | None) -> Path:
+    """Explicit ``--db-path`` (resolved) or the per-user default location."""
+    return Path(value).expanduser().resolve() if value else paths.default_db_path()
+
+
+def _resolve_profile_dir(value: str | None) -> Path:
+    """Explicit ``--profile-dir`` (resolved) or the per-user default location."""
+    return Path(value).expanduser().resolve() if value else paths.default_profile_dir()
+
+
 def _add_verbose(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--verbose",
@@ -30,11 +41,13 @@ def _add_verbose(parser: argparse.ArgumentParser) -> None:
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("post_url", help="Facebook post URL")
-    parser.add_argument("--db-path", default="reactions.db", help="SQLite database path")
+    parser.add_argument(
+        "--db-path", default=None, help="SQLite database path (default: per-user data dir)"
+    )
     parser.add_argument(
         "--profile-dir",
-        default=".profiles/facebook",
-        help="Persistent Playwright profile dir (login persists here)",
+        default=None,
+        help="Persistent Playwright profile dir (default: per-user data dir; login persists here)",
     )
     parser.add_argument("--headless", action="store_true", help="Run browser headless")
     _add_verbose(parser)
@@ -50,8 +63,8 @@ def build_parser() -> argparse.ArgumentParser:
     login = sub.add_parser("login", help="One-time: open Facebook headed and wait for you to log in")
     login.add_argument(
         "--profile-dir",
-        default=".profiles/facebook",
-        help="Persistent Playwright profile dir (login persists here)",
+        default=None,
+        help="Persistent Playwright profile dir (default: per-user data dir; login persists here)",
     )
     login.add_argument("--timeout", type=int, default=300, help="Seconds to wait for login")
     _add_verbose(login)
@@ -91,7 +104,9 @@ def build_parser() -> argparse.ArgumentParser:
         parser_ = sub.add_parser(name, help=f"{verb.capitalize()} profile URL(s) directly (no scrape/DB)")
         parser_.add_argument("profile_urls", nargs="+", help=f"Profile URL(s) to {verb}")
         parser_.add_argument(
-            "--profile-dir", default=".profiles/facebook", help="Persistent Playwright profile dir"
+            "--profile-dir",
+            default=None,
+            help="Persistent Playwright profile dir (default: per-user data dir)",
         )
         parser_.add_argument("--headless", action="store_true", help="Run browser headless")
         parser_.add_argument("--execute", action="store_true", help=f"Actually {verb} (default is a dry-run)")
@@ -111,14 +126,19 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--profile-url", default=None, help="Also dump a profile's action buttons/menu")
     inspect.add_argument("--out", default=None, help="Write the JSON report to this path")
 
+    lic = sub.add_parser("license", help="Activate, check, or release your Maknassa licence")
+    lic.add_argument("action", choices=["activate", "status", "deactivate"])
+    lic.add_argument("key", nargs="?", default=None, help="Licence key (required for activate)")
+    _add_verbose(lic)
+
     return parser
 
 
 def _config_from_args(args: argparse.Namespace) -> ReactionConfig:
     return ReactionConfig(
         post_url=args.post_url,
-        db_path=Path(args.db_path).expanduser().resolve(),
-        profile_dir=Path(args.profile_dir).expanduser().resolve(),
+        db_path=_resolve_db_path(args.db_path),
+        profile_dir=_resolve_profile_dir(args.profile_dir),
         headless=bool(args.headless),
         max_idle_rounds=getattr(args, "max_idle_rounds", 3),
         max_scroll_rounds=getattr(args, "max_scroll_rounds", 200),
@@ -197,8 +217,8 @@ def _cmd_block(args: argparse.Namespace) -> int:
 def _cmd_login(args: argparse.Namespace) -> int:
     config = ReactionConfig(
         post_url="",
-        db_path=Path("reactions.db").resolve(),
-        profile_dir=Path(args.profile_dir).expanduser().resolve(),
+        db_path=_resolve_db_path(None),
+        profile_dir=_resolve_profile_dir(args.profile_dir),
         headless=False,
     )
     c_user = login_flow(config, timeout_s=args.timeout)
@@ -265,7 +285,7 @@ def _cmd_block_url(args: argparse.Namespace) -> int:
             print(f"  {url}")
         return 0
     config = session_config(
-        args.profile_dir,
+        _resolve_profile_dir(args.profile_dir),
         headless=args.headless,
         min_delay_s=args.min_delay,
         max_delay_s=args.max_delay,
@@ -285,7 +305,7 @@ def _cmd_unblock_url(args: argparse.Namespace) -> int:
         for url in urls:
             print(f"  {url}")
         return 0
-    config = session_config(args.profile_dir, headless=args.headless)
+    config = session_config(_resolve_profile_dir(args.profile_dir), headless=args.headless)
     outcomes = unblock_urls(config, urls)
     _print_url_outcomes(outcomes, "unblocked")
     return 0
@@ -298,6 +318,27 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_license(args: argparse.Namespace) -> int:
+    from reactions import licensing
+
+    if args.action == "activate":
+        result = licensing.activate(args.key or "")
+        print(result.detail)
+        return 0 if result.activated else 1
+    if args.action == "deactivate":
+        ok = licensing.deactivate()
+        print("Licence released for this machine." if ok else "No active licence to release.")
+        return 0
+    status = licensing.status()  # "status"
+    line = status.detail
+    if status.key_masked:
+        line += f"  (key {status.key_masked})"
+    if status.last_validated_at:
+        line += f"  last validated {status.last_validated_at}"
+    print(line)
+    return 0 if status.activated else 1
+
+
 # Command dispatch as data: subcommand name -> handler. Replaces the if/elif chain.
 _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "login": _cmd_login,
@@ -307,7 +348,25 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "block-url": _cmd_block_url,
     "unblock-url": _cmd_unblock_url,
     "inspect": _cmd_inspect,
+    "license": _cmd_license,
 }
+
+# Commands that drive the browser are gated behind an active licence; `license`
+# (managing the key itself) is always allowed.
+_UNGATED_COMMANDS = frozenset({"license"})
+
+
+def _require_license(command: str) -> bool:
+    from reactions import licensing
+
+    if command in _UNGATED_COMMANDS or licensing.is_activated():
+        return True
+    print(
+        "This copy of Maknassa isn't activated. Run "
+        "`maknassa license activate <key>` to activate it "
+        f"(or set {licensing.DEV_BYPASS_ENV}=1 for development)."
+    )
+    return False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -315,4 +374,8 @@ def main(argv: list[str] | None = None) -> int:
     level = logging.INFO if getattr(args, "verbose", False) else logging.WARNING
     logging.basicConfig(level=level, format="%(levelname)s %(name)s: %(message)s")
     handler = _COMMANDS.get(args.command)
-    return handler(args) if handler else 1
+    if handler is None:
+        return 1
+    if not _require_license(args.command):
+        return 3
+    return handler(args)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from functools import partial
+
 import pytest
 
 from reactions.selectors import (
@@ -87,9 +89,9 @@ def test_extract_profile_id(url, expected):
 
 
 def test_localized_action_labels_match_both_languages():
-    # Curried signature is now (patterns, value); also exercise partial application.
-    is_more = matches_any(MORE_BUTTON_LABELS)
-    is_block = matches_any(BLOCK_MENU_LABELS)
+    # Signature is (patterns, value); named predicates are functools.partial.
+    is_more = partial(matches_any, MORE_BUTTON_LABELS)
+    is_block = partial(matches_any, BLOCK_MENU_LABELS)
     assert is_more("More")
     assert is_more("المزيد")
     assert is_block("Block")

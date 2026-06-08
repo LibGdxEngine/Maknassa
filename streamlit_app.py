@@ -23,6 +23,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from reactions import licensing, paths
 from reactions.config import ReactionConfig
 from reactions.service import block_urls, session_config
 from reactions.ui_fetch import UIReactor, fetch_reactors, in_thread
@@ -51,7 +52,7 @@ def _sidebar() -> dict:
             "Uses your saved Facebook login. If fetching hits a login wall, run "
             "`python main.py login` once in a terminal, finish signing in, then retry."
         )
-        profile_dir = st.text_input("Profile dir", value=".profiles/facebook")
+        profile_dir = st.text_input("Profile dir", value=str(paths.default_profile_dir()))
         headless = st.checkbox(
             "Headless browser", value=False, help="Uncheck to watch the browser / solve checkpoints."
         )
@@ -83,7 +84,7 @@ def _sidebar() -> dict:
 def _fetch_config(post_url: str, settings: dict) -> ReactionConfig:
     return ReactionConfig(
         post_url=post_url,
-        db_path=Path("reactions.db"),
+        db_path=paths.default_db_path(),
         profile_dir=Path(settings["profile_dir"]).expanduser().resolve(),
         headless=settings["headless"],
     )
@@ -194,7 +195,42 @@ def _render_outcomes() -> None:
         st.write(f"{icon} `{outcome.status}` {outcome.name or outcome.profile_url}{detail}")
 
 
+def _render_activation_gate() -> None:
+    """Block the app behind licence activation. Returns only once activated."""
+    if licensing.is_activated():
+        return
+    st.title("🔑 Activate Maknassa")
+    st.write(
+        "Maknassa is a licensed app. Paste the licence key from your purchase "
+        "confirmation to activate it on this machine."
+    )
+    key = st.text_input("Licence key", type="password", placeholder="XXXXXXXX-XXXX-…")
+    agreed = st.checkbox(
+        "I accept the End-User Licence Agreement, and I understand I run this on my "
+        "own Facebook account and at my own risk."
+    )
+    if st.button("Activate", type="primary", disabled=not agreed):
+        if not key.strip():
+            st.warning("Paste your licence key first.")
+        else:
+            with st.spinner("Activating…"):
+                result = licensing.activate(key)
+            if result.activated:
+                st.success(f"{result.detail} Loading…")
+                st.rerun()
+            else:
+                st.error(result.detail)
+    with st.expander("Where do I find my key, and how do I move it to another machine?"):
+        st.write(
+            "Your key is in the purchase confirmation email/receipt. One key activates "
+            "one machine; to move it, run `maknassa license deactivate` here first, then "
+            "activate on the other machine."
+        )
+    st.stop()
+
+
 def main() -> None:
+    _render_activation_gate()
     st.title("🚫 Reactor Blocker")
     st.write("Fetch everyone who reacted to a post, then block the ones you pick.")
     settings = _sidebar()

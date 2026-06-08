@@ -3,6 +3,14 @@ __pycache__/
 *.py[cod]
 .venv/
 *.egg-info/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Packaging / build output
+build/
+dist/
+packaging/ms-playwright/   # bundled Chromium fetched at build time (large)
 
 # Playwright persistent profile — contains your Facebook session cookies. NEVER commit.
 .profiles/

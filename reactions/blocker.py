@@ -3,9 +3,7 @@ from __future__ import annotations
 import logging
 import random
 import time
-from dataclasses import dataclass, replace
-from functools import reduce
-from typing import Callable
+from collections.abc import Callable
 
 from reactions.config import ReactionConfig
 from reactions.models import BlockOutcome, ReactorRecord
@@ -20,22 +18,6 @@ logger = logging.getLogger(__name__)
 # (tests, unattended batch); the default (:meth:`ProfileBlocker._prompt`) reads
 # stdin.
 Confirmer = Callable[[ReactorRecord, str], str]
-
-
-@dataclass(frozen=True)
-class _RunState:
-    """Immutable control state threaded through the block/unblock fold.
-
-    ``reduce`` can't ``break``, so early exit (quit / daily cap) is carried as the
-    ``stopped`` flag: once set, the reducer passes the state through untouched.
-    Outcomes are accumulated in a plain list outside the fold -- appending is a
-    side effect anyway, and it keeps accumulation O(n) instead of the O(n^2) of
-    rebuilding an immutable tuple each step.
-    """
-
-    remaining: int = 0
-    prompt_each: bool = True
-    stopped: bool = False
 
 
 class ProfileBlocker:
@@ -82,6 +64,7 @@ class ProfileBlocker:
         action: str,
         confirm: Confirmer | None = None,
     ) -> list[BlockOutcome]:
+        outcomes: list[BlockOutcome] = []
         is_block = action == "block"
         success = "blocked" if is_block else "unblocked"
         # Default to the interactive stdin prompt; callers/tests can inject their own.
@@ -91,41 +74,33 @@ class ProfileBlocker:
         # when set: daily_cap <= 0 means unlimited (the default).
         cap = self.config.daily_cap
         if is_block and cap > 0:
-            start_remaining = max(cap - self.store.count_blocked_today(), 0)
-            if start_remaining <= 0:
+            remaining = max(cap - self.store.count_blocked_today(), 0)
+            if remaining <= 0:
                 logger.warning("daily cap reached (%d); nothing to do", cap)
                 print(f"Daily cap reached ({cap}). Nothing to do.")
-                return []
+                return outcomes
         else:
-            start_remaining = len(targets)
+            remaining = len(targets)
 
-        outcomes: list[BlockOutcome] = []
+        prompt_each = self.config.confirm_each
         with FacebookBlocker(
             self.config.profile_dir,
             headless=self.config.headless,
             dialog_timeout_ms=self.config.dialog_timeout_ms,
         ) as service:
-
-            def step(state: _RunState, target: ReactorRecord) -> _RunState:
-                # NOTE (spike): a fold over effectful, early-terminating work is
-                # noticeably more contorted than the imperative loop it replaces --
-                # the control state threads immutably, `stopped` fakes the `break`
-                # that `reduce` lacks, and outcomes accumulate via an external list
-                # (appending is a side effect either way). This is the honest cost.
-                if state.stopped:
-                    return state
-                if is_block and state.remaining <= 0:
-                    logger.info("daily cap of %d reached; stopping", self.config.daily_cap)
-                    print(f"Daily cap of {self.config.daily_cap} reached; stopping.")
-                    return replace(state, stopped=True)
-
-                decision = confirm(target, action) if state.prompt_each else "y"
+            for target in targets:
+                if is_block and cap > 0 and remaining <= 0:
+                    logger.info("daily cap of %d reached; stopping", cap)
+                    print(f"Daily cap of {cap} reached; stopping.")
+                    break
+                decision = confirm(target, action) if prompt_each else "y"
                 if decision == "q":
-                    return replace(state, stopped=True)
-                prompt_each = False if decision == "a" else state.prompt_each
-                if decision == "n":
+                    break
+                if decision == "a":
+                    prompt_each = False
+                elif decision == "n":
                     outcomes.append(self._outcome(target, "skipped", "user skipped"))
-                    return replace(state, prompt_each=prompt_each)
+                    continue
 
                 act = service.block if is_block else service.unblock
                 outcome = act(target.profile_url, target.name)
@@ -134,26 +109,19 @@ class ProfileBlocker:
                 outcome.detail = outcome.detail or target.reaction_type
                 outcomes.append(outcome)
 
-                if outcome.status != success:
+                if outcome.status == success:
+                    mark = self.store.mark_blocked if is_block else self.store.mark_unblocked
+                    mark(target.post_url, target.profile_key)
+                    remaining -= 1
+                    logger.info("%s %s", success, target.name or target.profile_key)
+                    self._human_delay()
+                else:
                     logger.warning(
                         "%s failed for %s: %s",
                         action,
                         target.name or target.profile_key,
                         outcome.detail,
                     )
-                    return replace(state, prompt_each=prompt_each)
-
-                mark = self.store.mark_blocked if is_block else self.store.mark_unblocked
-                mark(target.post_url, target.profile_key)
-                logger.info("%s %s", success, target.name or target.profile_key)
-                self._human_delay()
-                return replace(state, remaining=state.remaining - 1, prompt_each=prompt_each)
-
-            reduce(
-                step,
-                targets,
-                _RunState(remaining=start_remaining, prompt_each=self.config.confirm_each),
-            )
         return outcomes
 
     def _prompt(self, target: ReactorRecord, action: str = "block") -> str:

@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from reactions.models import ReactorRecord, SessionStats
 
 
 def utcnow_iso() -> str:
-    return datetime.now(UTC).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def build_fetch_query(
@@ -154,7 +155,9 @@ class SQLiteStore:
                 """,
                 (post_url, utcnow_iso(), auth_mode, str(profile_dir), int(headless), "running"),
             )
-            return int(cursor.lastrowid)
+            row_id = cursor.lastrowid
+            assert row_id is not None  # INSERT always yields a rowid
+            return row_id
 
     def update_session_context(self, session_id: int, **fields: Any) -> None:
         assignments, values = [], []

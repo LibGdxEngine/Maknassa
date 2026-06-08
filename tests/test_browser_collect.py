@@ -83,11 +83,10 @@ def test_collect_records_pure_pipeline_dedups_and_rejects():
     assert all(r.reaction_type == "love" for r in records)
 
 
-def test_collect_records_is_curried():
-    """Partial application yields a reusable tab-specific collector."""
+def test_collect_records_tags_reaction_type():
+    """The pure function stamps each record with the tab's reaction type."""
     rows = [{"name": "John", "profile_url": "https://www.facebook.com/john.doe.5"}]
-    like_collector = collect_records(POST_URL, "like")  # (locale, rows) still pending
-    records = like_collector("en", rows)
+    records = collect_records(POST_URL, "like", "en", rows)
     assert records[0].reaction_type == "like"
 
 

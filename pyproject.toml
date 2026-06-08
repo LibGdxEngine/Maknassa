@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "maknassa"
+version = "0.1.0"
+description = "Self-hosted desktop tool to review and block the people who reacted to your Facebook post."
+requires-python = ">=3.10"
+readme = "README.md"
+license = { file = "EULA.md" }
+authors = [{ name = "Maknassa" }]
+dependencies = [
+    "playwright==1.58.0",
+    "playwright-stealth==2.0.2",
+    "pydantic==2.12.5",
+    "tenacity==9.1.4",
+    "lxml==6.0.2",
+    "streamlit==1.58.0",
+    "platformdirs>=4.0",
+    "pywebview>=5.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.0.3", "mypy>=1.8", "ruff>=0.6"]
+build = ["pyinstaller>=6.6"]
+
+[project.scripts]
+maknassa = "reactions.cli:main"
+
+[project.gui-scripts]
+maknassa-gui = "reactions.desktop:main"
+
+[tool.setuptools]
+packages = ["reactions"]
+py-modules = ["streamlit_app", "main"]
+
+[tool.mypy]
+python_version = "3.10"
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+# playwright-stealth ships no py.typed/stubs; don't let its untyped import fail mypy.
+[[tool.mypy.overrides]]
+module = ["playwright_stealth"]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]  # line length is enforced by the formatter, not the linter

@@ -17,8 +17,7 @@ re-run ``inspect`` mode to capture the live strings for your account/locale.
 from __future__ import annotations
 
 import re
-
-from toolz import curry
+from functools import partial
 
 # --------------------------------------------------------------------------- #
 # Reaction types: canonical key -> localized labels (English + Arabic).
@@ -169,12 +168,11 @@ def normalize_control_text(value: str | None) -> str:
     return normalized
 
 
-@curry
 def matches_any(patterns: tuple[str, ...], value: str | None) -> bool:
     """True if any localized pattern is contained in ``value`` (case-insensitive).
 
-    Curried with ``patterns`` first so a partially-applied predicate can be named
-    and reused, e.g. ``is_block = matches_any(BLOCK_MENU_LABELS)``.
+    ``patterns`` comes first so a named predicate is a ``functools.partial``,
+    e.g. ``is_block = partial(matches_any, BLOCK_MENU_LABELS)``.
     """
     normalized = normalize_control_text(value)
     if not normalized:
@@ -203,9 +201,9 @@ def reaction_type_from_label(value: str | None) -> str | None:
     return None
 
 
-# A login/checkpoint-wall detector, built by partially applying the curried
-# ``matches_any`` to the login text patterns.
-is_login_wall = matches_any(LOGIN_TEXT_PATTERNS)
+# A login/checkpoint-wall detector, built by partially applying ``matches_any``
+# to the login text patterns.
+is_login_wall = partial(matches_any, LOGIN_TEXT_PATTERNS)
 
 
 def is_profile_href(href: str | None) -> bool:

@@ -21,9 +21,12 @@ from __future__ import annotations
 import logging
 import random
 import time
+from contextlib import AbstractContextManager
+from functools import partial
 from pathlib import Path
+from typing import TypedDict
 
-from playwright.sync_api import Page, TimeoutError
+from playwright.sync_api import BrowserContext, Page, TimeoutError
 
 from reactions._js import JS_HELPERS, JS_SLEEP
 from reactions.browser import navigate, persistent_page
@@ -170,21 +173,31 @@ _FIND_CONFIRM_BUTTON_SCRIPT = (
 # the context-manager-free entry point used by the CLI's by-URL commands.
 # --------------------------------------------------------------------------- #
 
-# Keyword args that specialize ``menu_action`` into block vs unblock.
-_BLOCK = dict(
-    menu_labels=BLOCK_MENU_LABELS,
-    confirm_labels=BLOCK_CONFIRM_LABELS,
-    success_status="blocked",
-    expect_unblock_after=True,
-    stage="block",
-)
-_UNBLOCK = dict(
-    menu_labels=UNBLOCK_LABELS,
-    confirm_labels=UNBLOCK_CONFIRM_LABELS,
-    success_status="unblocked",
-    expect_unblock_after=False,
-    stage="unblock",
-)
+# Keyword args that specialize ``menu_action`` into block vs unblock. Typed as a
+# TypedDict so the ``**_BLOCK`` / ``**_UNBLOCK`` spread stays fully type-checked
+# against ``menu_action``'s keyword params (a plain dict erases to ``object``).
+class MenuActionSpec(TypedDict):
+    menu_labels: tuple[str, ...]
+    confirm_labels: tuple[str, ...]
+    success_status: str
+    expect_unblock_after: bool
+    stage: str
+
+
+_BLOCK: MenuActionSpec = {
+    "menu_labels": BLOCK_MENU_LABELS,
+    "confirm_labels": BLOCK_CONFIRM_LABELS,
+    "success_status": "blocked",
+    "expect_unblock_after": True,
+    "stage": "block",
+}
+_UNBLOCK: MenuActionSpec = {
+    "menu_labels": UNBLOCK_LABELS,
+    "confirm_labels": UNBLOCK_CONFIRM_LABELS,
+    "success_status": "unblocked",
+    "expect_unblock_after": False,
+    "stage": "unblock",
+}
 
 
 def session_config(
@@ -339,8 +352,8 @@ def verify(config: ReactionConfig, page: Page, url: str, expect_unblock_after: b
         load_profile(config, page, url)
         opened = open_more_menu(page)
         items = page.evaluate(_DUMP_MENU_ITEMS_SCRIPT) if opened else []
-        is_unblock = matches_any(UNBLOCK_LABELS)
-        is_block = matches_any(BLOCK_MENU_LABELS)
+        is_unblock = partial(matches_any, UNBLOCK_LABELS)
+        is_block = partial(matches_any, BLOCK_MENU_LABELS)
         has_unblock = any(map(is_unblock, items))
         has_block = any(is_block(it) and not is_unblock(it) for it in items)
         if expect_unblock_after:  # after a BLOCK
@@ -354,11 +367,11 @@ def verify(config: ReactionConfig, page: Page, url: str, expect_unblock_after: b
 def menu_action(
     config: ReactionConfig,
     page: Page,
-    profile_url: str,
+    profile_url: str | None,
     name: str | None,
     *,
-    menu_labels,
-    confirm_labels,
+    menu_labels: tuple[str, ...],
+    confirm_labels: tuple[str, ...],
     success_status: str,
     expect_unblock_after: bool,
     stage: str,
@@ -371,7 +384,7 @@ def menu_action(
     names merely contain the block verb.
     """
     url = normalize_profile_url("https://www.facebook.com/", profile_url) or profile_url
-    key = extract_profile_id(url) or url or profile_url
+    key = extract_profile_id(url) or url or profile_url or ""
 
     def outcome(status: str, detail: str | None = None) -> BlockOutcome:
         return BlockOutcome(profile_key=key, name=name, profile_url=url, status=status, detail=detail)
@@ -487,12 +500,12 @@ class FacebookBlocker:
             min_delay_s=min_delay_s,
             max_delay_s=max_delay_s,
         )
-        self._cm = None
-        self._context = None
+        self._cm: AbstractContextManager[tuple[BrowserContext, Page]] | None = None
+        self._context: BrowserContext | None = None
         self.page: Page | None = None
 
     # --- session lifecycle ------------------------------------------------- #
-    def __enter__(self) -> "FacebookBlocker":
+    def __enter__(self) -> FacebookBlocker:
         self._cm = persistent_page(self.config)
         self._context, self.page = self._cm.__enter__()
         return self
@@ -503,11 +516,11 @@ class FacebookBlocker:
             self._cm = self._context = self.page = None
 
     # --- public API: thin shell over the functional core above ------------- #
-    def block(self, profile_url: str, name: str | None = None) -> BlockOutcome:
+    def block(self, profile_url: str | None, name: str | None = None) -> BlockOutcome:
         """Block a single profile by URL. Returns a verified BlockOutcome."""
         return menu_action(self.config, self._require_page(), profile_url, name, **_BLOCK)
 
-    def unblock(self, profile_url: str, name: str | None = None) -> BlockOutcome:
+    def unblock(self, profile_url: str | None, name: str | None = None) -> BlockOutcome:
         """Unblock a single profile by URL. Returns a verified BlockOutcome."""
         return menu_action(self.config, self._require_page(), profile_url, name, **_UNBLOCK)
 

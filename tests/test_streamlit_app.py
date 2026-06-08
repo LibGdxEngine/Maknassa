@@ -42,6 +42,16 @@ def test_app_renders_without_error():
     assert any("Reactor Blocker" in (m.value or "") for m in at.title)
 
 
+def test_activation_gate_blocks_when_unlicensed(monkeypatch):
+    """With no dev bypass and no licence token, only the activation screen renders."""
+    monkeypatch.delenv("MAKNASSA_DEV", raising=False)
+    at = _app().run()
+    assert not at.exception
+    assert any("Activate Maknassa" in (m.value or "") for m in at.title)
+    # The real app must not render past the gate.
+    assert not any("Reactor Blocker" in (m.value or "") for m in at.title)
+
+
 def test_empty_url_fetch_warns_and_does_not_crash():
     at = _app().run()
     fetch = next(b for b in at.button if b.label == "Fetch reactors")

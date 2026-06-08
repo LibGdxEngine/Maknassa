@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 from playwright.sync_api import (
     BrowserContext,
@@ -16,8 +16,6 @@ from playwright.sync_api import (
 )
 from playwright_stealth import Stealth
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
-from toolz import curry, pipe
-from toolz.curried import filter as cfilter, map as cmap, unique
 
 from reactions._js import JS_COLLECT_LOOP, JS_HELPERS, JS_SLEEP
 from reactions.config import ReactionConfig
@@ -380,33 +378,31 @@ def select_targets(tabs: list[dict]) -> list[tuple[int, str, int]]:
     return targets or [(-1, "unknown", 0)]
 
 
-@curry
 def collect_records(
     post_url: str, reaction_type: str, locale: str | None, rows: list[dict]
 ) -> list[ReactorRecord]:
     """Pure transform: raw DOM rows -> normalized, de-duplicated reactor records.
 
     No I/O and no shared state, so it is fully unit-testable without a browser.
-    Curried (config-ish args first) so a tab-specific collector can be partially
-    applied. The favorable FP case: the row->record flow reads as a pipeline.
+    Each row becomes a candidate, is parsed (dropping non-profile rows), and the
+    first record for any ``profile_key`` wins (later duplicates are skipped).
     """
-    def to_candidate(row: dict) -> RawReactorCandidate:
-        return RawReactorCandidate(
+    records: list[ReactorRecord] = []
+    seen: set[str] = set()
+    for row in rows:
+        candidate = RawReactorCandidate(
             name_hint=row.get("name"),
             profile_url_hint=row.get("profile_url"),
             reaction_type=reaction_type,
             source_url=post_url,
             page_locale=locale,
         )
-
-    return pipe(
-        rows,
-        cmap(to_candidate),
-        cmap(parse_reactor),
-        cfilter(lambda record: record is not None),
-        unique(key=lambda record: record.profile_key),
-        list,
-    )
+        record = parse_reactor(candidate)
+        if record is None or record.profile_key in seen:
+            continue
+        seen.add(record.profile_key)
+        records.append(record)
+    return records
 
 
 def open_reactions_dialog(page: Page, config: ReactionConfig) -> int:

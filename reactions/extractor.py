@@ -1,8 +1,7 @@
 from __future__ import annotations
 
+from functools import partial
 from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
-
-from toolz import curry, pipe
 
 from reactions.models import RawReactorCandidate, ReactorRecord
 from reactions.selectors import extract_profile_id, is_profile_href
@@ -15,14 +14,13 @@ def normalize_whitespace(value: str | None) -> str | None:
     return normalized or None
 
 
-@curry
 def normalize_url_with_keys(
     keep_query_keys: tuple[str, ...], base_url: str, url: str | None
 ) -> str | None:
     """Canonicalize a URL, keeping only an allow-list of query keys.
 
-    Curried with ``keep_query_keys`` first so the profile-url normalizer is just a
-    partial application. Profile links keep ``id`` so ``profile.php?id=123``
+    ``keep_query_keys`` comes first so the profile-url normalizer is just a
+    ``functools.partial``. Profile links keep ``id`` so ``profile.php?id=123``
     survives; everything else (tracking params) is dropped.
     """
     if not url:
@@ -42,9 +40,9 @@ def normalize_url_with_keys(
 
 
 # Profile-url normalizer: keep only ``id`` (so profile.php?id=123 survives), drop
-# all tracking params. A partial application of the curried normalizer above; note
-# the argument order is now ``(base_url, url)``.
-normalize_profile_url = normalize_url_with_keys(("id",))
+# all tracking params. A partial application of the normalizer above; the bound
+# call takes ``(base_url, url)``.
+normalize_profile_url = partial(normalize_url_with_keys, ("id",))
 
 
 def _validate_profile_url(url: str | None) -> str | None:
@@ -54,12 +52,10 @@ def _validate_profile_url(url: str | None) -> str | None:
 
 def parse_reactor(candidate: RawReactorCandidate) -> ReactorRecord | None:
     """Turn a raw reactor row into a normalized, de-dup-keyed record."""
-    # normalize -> validate composed as a pipe; the None short-circuit (an invalid
-    # or non-profile URL) stays an explicit guard since toolz has no Maybe.
-    url = pipe(
-        normalize_profile_url(candidate.source_url, candidate.profile_url_hint),
-        _validate_profile_url,
-    )
+    # normalize -> validate; the None short-circuit (an invalid or non-profile
+    # URL) is an explicit guard.
+    normalized = normalize_profile_url(candidate.source_url, candidate.profile_url_hint)
+    url = _validate_profile_url(normalized)
     if url is None:
         return None
     profile_id = extract_profile_id(url, candidate.profile_url_hint)
