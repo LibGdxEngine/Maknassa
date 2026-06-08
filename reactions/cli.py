@@ -73,9 +73,11 @@ def build_parser() -> argparse.ArgumentParser:
     block.add_argument("--execute", action="store_true", help="Actually block (default is a dry-run preview)")
     block.add_argument("--no-confirm", action="store_true", help="Skip the per-person prompt when executing")
     block.add_argument("--include-blocked", action="store_true", help="Re-include already-blocked reactors")
-    block.add_argument("--daily-cap", type=int, default=50)
-    block.add_argument("--min-delay", type=float, default=8.0, help="Min seconds between blocks")
-    block.add_argument("--max-delay", type=float, default=25.0, help="Max seconds between blocks")
+    block.add_argument(
+        "--daily-cap", type=int, default=0, help="Max blocks before stopping (0 = unlimited)"
+    )
+    block.add_argument("--min-delay", type=float, default=2.0, help="Min seconds between blocks")
+    block.add_argument("--max-delay", type=float, default=6.0, help="Max seconds between blocks")
 
     unblock = sub.add_parser("unblock", help="Unblock previously-blocked reactors (dry-run by default)")
     _add_common(unblock)
@@ -97,8 +99,11 @@ def build_parser() -> argparse.ArgumentParser:
         return parser_
 
     block_url = _add_url_action("block-url", "block")
-    block_url.add_argument("--min-delay", type=float, default=8.0, help="Min seconds between blocks")
-    block_url.add_argument("--max-delay", type=float, default=25.0, help="Max seconds between blocks")
+    block_url.add_argument("--min-delay", type=float, default=2.0, help="Min seconds between blocks")
+    block_url.add_argument("--max-delay", type=float, default=6.0, help="Max seconds between blocks")
+    block_url.add_argument(
+        "--daily-cap", type=int, default=0, help="Max blocks before stopping (0 = unlimited)"
+    )
     _add_url_action("unblock-url", "unblock")
 
     inspect = sub.add_parser("inspect", help="Dump live DOM roles/aria-labels to confirm selectors")
@@ -119,9 +124,9 @@ def _config_from_args(args: argparse.Namespace) -> ReactionConfig:
         max_scroll_rounds=getattr(args, "max_scroll_rounds", 200),
         dry_run=not getattr(args, "execute", False),
         confirm_each=not getattr(args, "no_confirm", False),
-        daily_cap=getattr(args, "daily_cap", 50),
-        block_min_delay_s=getattr(args, "min_delay", 8.0),
-        block_max_delay_s=getattr(args, "max_delay", 25.0),
+        daily_cap=getattr(args, "daily_cap", 0),
+        block_min_delay_s=getattr(args, "min_delay", 2.0),
+        block_max_delay_s=getattr(args, "max_delay", 6.0),
     )
 
 
@@ -177,7 +182,8 @@ def _cmd_block(args: argparse.Namespace) -> int:
         print("\nNothing was blocked. Re-run with --execute to perform the blocks.")
         return 0
 
-    print(f"EXECUTING blocks for {len(targets)} reactor(s) (cap {config.daily_cap}/day)...")
+    cap_note = f"cap {config.daily_cap}" if config.daily_cap > 0 else "no cap"
+    print(f"EXECUTING blocks for {len(targets)} reactor(s) ({cap_note})...")
     outcomes = blocker.execute(targets)
     blocked = sum(1 for o in outcomes if o.status == "blocked")
     failed = sum(1 for o in outcomes if o.status == "failed")
@@ -263,6 +269,7 @@ def _cmd_block_url(args: argparse.Namespace) -> int:
         headless=args.headless,
         min_delay_s=args.min_delay,
         max_delay_s=args.max_delay,
+        daily_cap=args.daily_cap,
     )
     outcomes = block_urls(config, urls)
     _print_url_outcomes(outcomes, "blocked")

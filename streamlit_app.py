@@ -56,15 +56,27 @@ def _sidebar() -> dict:
             "Headless browser", value=False, help="Uncheck to watch the browser / solve checkpoints."
         )
         st.subheader("Block pacing")
-        st.caption("Random delay between blocks keeps the action human-paced.")
+        st.caption(
+            "Random delay between blocks keeps the action human-paced. Lower is "
+            "faster but riskier on large batches (Facebook may temporarily block "
+            "the action). Set a stop-after limit below as a safety brake."
+        )
         min_delay, max_delay = st.slider(
-            "Seconds between blocks", min_value=2.0, max_value=60.0, value=(8.0, 25.0), step=1.0
+            "Seconds between blocks", min_value=2.0, max_value=60.0, value=(2.0, 6.0), step=1.0
+        )
+        daily_cap = st.number_input(
+            "Stop after N blocks (0 = unlimited)",
+            min_value=0,
+            value=0,
+            step=10,
+            help="Optional safety brake: stop the run once this many profiles have been blocked.",
         )
     return {
         "profile_dir": profile_dir,
         "headless": headless,
         "min_delay": float(min_delay),
         "max_delay": float(max_delay),
+        "daily_cap": int(daily_cap),
     }
 
 
@@ -117,6 +129,7 @@ def _do_block(settings: dict) -> None:
         headless=settings["headless"],
         min_delay_s=settings["min_delay"],
         max_delay_s=settings["max_delay"],
+        daily_cap=settings["daily_cap"],
     )
     with st.spinner(f"Blocking {len(urls)} profile(s)… this pauses between each one."):
         st.session_state["outcomes"] = in_thread(block_urls, config, urls)

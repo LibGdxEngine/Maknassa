@@ -63,6 +63,29 @@ _DUMP_MENU_ITEMS_SCRIPT = (
 """
 )
 
+# True once the profile action bar has hydrated enough to expose a "..." (more
+# actions) candidate button. Mirrors the isCandidate filter in
+# _OPEN_ACTIONS_MENU_SCRIPT so load_profile can wait for the SAME element the menu
+# opener needs -- a targeted wait that resolves in ~1-2s, replacing the old
+# `networkidle` wait that never settled on Facebook and burned its full timeout.
+_ACTION_BAR_READY_SCRIPT = (
+    "(args) => {"
+    + JS_HELPERS
+    + """
+  const labels = args.labels.map(lc);
+  const distractors = args.distractors.map(lc);
+  const isCandidate = (el) => {
+    const a = lc(el.getAttribute('aria-label'));
+    const t = lc(el.innerText);
+    if (distractors.some((d) => d && (a.includes(d) || t.includes(d)))) return false;
+    return labels.some((l) => l && (a === l || t === l || a.includes(l) || t.includes(l)));
+  };
+  return [...document.querySelectorAll('[role="button"]')].filter(visible).some(isCandidate);
+}
+"""
+)
+
+
 # Open the profile's actions ("...") menu FUNCTIONALLY: a profile page has many
 # "More" buttons (footer links, "see more comments"), and the real one is not
 # reliably identifiable by label alone. So we click each non-distractor "More"
@@ -169,10 +192,15 @@ def session_config(
     headless: bool = False,
     *,
     dialog_timeout_ms: int = 12_000,
-    min_delay_s: float = 8.0,
-    max_delay_s: float = 25.0,
+    min_delay_s: float = 2.0,
+    max_delay_s: float = 6.0,
+    daily_cap: int = 0,
 ) -> ReactionConfig:
-    """Build the by-URL service config (no post_url / DB needed)."""
+    """Build the by-URL service config (no post_url / DB needed).
+
+    ``daily_cap`` is an optional per-run safety brake (0 = unlimited, the default);
+    ``run_batch`` stops after that many successful actions.
+    """
     return ReactionConfig(
         post_url="",
         db_path=Path("reactions.db"),
@@ -181,6 +209,7 @@ def session_config(
         dialog_timeout_ms=dialog_timeout_ms,
         block_min_delay_s=min_delay_s,
         block_max_delay_s=max_delay_s,
+        daily_cap=daily_cap,
     )
 
 
@@ -189,21 +218,31 @@ def human_delay(config: ReactionConfig) -> None:
 
 
 def load_profile(config: ReactionConfig, page: Page, url: str) -> None:
-    """Navigate, let the profile shell hydrate, and dismiss overlays.
+    """Navigate, wait for the profile action bar to hydrate, and dismiss overlays.
 
-    Waiting for ``networkidle`` makes the "..." action bar reliably present;
-    pressing Escape dismisses the persistent Notifications flyout, which can
-    otherwise overlay the action bar and make the menu look "not found".
+    Waits for the "..." action-bar button to actually exist (via
+    ``_ACTION_BAR_READY_SCRIPT``) rather than for ``networkidle`` -- Facebook is a
+    streaming SPA whose network never goes idle, so the old wait burned its full
+    timeout on every load. This resolves in ~1-2s as soon as the bar is present,
+    and ``open_more_menu`` still retries with waits if it isn't. Pressing Escape
+    dismisses the persistent Notifications flyout, which can otherwise overlay the
+    action bar and make the menu look "not found".
     """
     navigate(page, url, config)
     try:
-        page.wait_for_load_state("networkidle", timeout=12_000)
-    except Exception:  # noqa: BLE001 - Facebook streams; fall back to a fixed wait
+        page.wait_for_function(
+            _ACTION_BAR_READY_SCRIPT,
+            arg={
+                "labels": list(MORE_BUTTON_LABELS),
+                "distractors": list(MORE_DISTRACTOR_TERMS),
+            },
+            timeout=config.action_ready_timeout_ms,
+        )
+    except Exception:  # noqa: BLE001 - fall through; open_more_menu retries with waits
         pass
-    page.wait_for_timeout(2_000)
     try:
         page.keyboard.press("Escape")
-        page.wait_for_timeout(500)
+        page.wait_for_timeout(300)
     except Exception:  # noqa: BLE001
         pass
 
@@ -218,14 +257,14 @@ def open_more_menu(page: Page) -> bool:
     }
     for _ in range(4):
         if page.evaluate(_OPEN_ACTIONS_MENU_SCRIPT, args):
-            page.wait_for_timeout(400)
+            page.wait_for_timeout(200)
             return True
         # Dismiss any overlay (Notifications flyout) and let the bar hydrate.
         try:
             page.keyboard.press("Escape")
         except Exception:  # noqa: BLE001
             pass
-        page.wait_for_timeout(2_000)
+        page.wait_for_timeout(1_000)
     return False
 
 
@@ -248,6 +287,28 @@ def click_confirm(config: ReactionConfig, page: Page, confirm_labels, attempts: 
             element.click(timeout=config.dialog_timeout_ms)
             return True
         page.wait_for_timeout(500)
+    return False
+
+
+def wait_for_confirm_dialog_closed(
+    config: ReactionConfig, page: Page, confirm_labels, attempts: int = 12
+) -> bool:
+    """Fast, same-page success check: poll until the confirm button (inside the real
+    block/unblock dialog) is gone. Facebook closes that dialog once the action
+    registers, so its disappearance confirms success without reloading the whole
+    profile. Reuses ``_FIND_CONFIRM_BUTTON_SCRIPT`` so it ignores the persistent
+    Notifications dialog exactly as ``click_confirm`` does.
+    """
+    args = {
+        "confirm": list(confirm_labels),
+        "avoid": list(BLOCK_CANCEL_LABELS),
+        "skipDialogLabels": list(NOTIFICATION_DIALOG_LABELS),
+    }
+    for _ in range(attempts):
+        handle = page.evaluate_handle(_FIND_CONFIRM_BUTTON_SCRIPT, args)
+        if handle.as_element() is None:
+            return True
+        page.wait_for_timeout(400)
     return False
 
 
@@ -328,8 +389,13 @@ def menu_action(
         # locate the confirm button inside the real block dialog and trusted-click.
         if not click_confirm(config, page, confirm_labels):
             return outcome("failed", "Confirm button not found")
-        page.wait_for_timeout(1800)
-        if verify(config, page, url, expect_unblock_after):
+        # Fast path (default): success once the confirm dialog closes -- no reload.
+        # Opt into the thorough reload-based verify via config.verify_reload.
+        if config.verify_reload:
+            confirmed = verify(config, page, url, expect_unblock_after)
+        else:
+            confirmed = wait_for_confirm_dialog_closed(config, page, confirm_labels)
+        if confirmed:
             return outcome(success_status)
         logger.warning("%s of %s: confirm clicked but not verified", stage, url)
         return outcome("failed", f"confirm clicked but {stage} not verified")
@@ -344,14 +410,26 @@ def menu_action(
 def run_batch(
     config: ReactionConfig, action_fn, urls: list[str], delay_between: bool = True
 ) -> list[BlockOutcome]:
-    """Apply ``action_fn`` to each URL, pausing between successful actions."""
+    """Apply ``action_fn`` to each URL, pausing between successful actions.
+
+    Honors ``config.daily_cap`` as a per-run safety brake: once that many actions
+    have succeeded, the remaining URLs are skipped. ``daily_cap <= 0`` means
+    unlimited (the default), so every URL is processed.
+    """
+    cap = config.daily_cap if config.daily_cap > 0 else 0
     outcomes: list[BlockOutcome] = []
+    succeeded = 0
     for index, url in enumerate(urls):
+        if cap and succeeded >= cap:
+            logger.info("cap of %d reached; stopping (%d URL(s) skipped)", cap, len(urls) - index)
+            break
         outcome = action_fn(url)
         outcomes.append(outcome)
         last = index == len(urls) - 1
-        if delay_between and not last and outcome.status in ("blocked", "unblocked"):
-            human_delay(config)
+        if outcome.status in ("blocked", "unblocked"):
+            succeeded += 1
+            if delay_between and not last and not (cap and succeeded >= cap):
+                human_delay(config)
     return outcomes
 
 
@@ -399,8 +477,8 @@ class FacebookBlocker:
         headless: bool = False,
         *,
         dialog_timeout_ms: int = 12_000,
-        min_delay_s: float = 8.0,
-        max_delay_s: float = 25.0,
+        min_delay_s: float = 2.0,
+        max_delay_s: float = 6.0,
     ) -> None:
         self.config = session_config(
             profile_dir,

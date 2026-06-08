@@ -87,12 +87,14 @@ class ProfileBlocker:
         # Default to the interactive stdin prompt; callers/tests can inject their own.
         confirm = confirm or self._prompt
 
-        # The daily cap guards the (anti-bot-sensitive) block action only.
-        if is_block:
-            start_remaining = max(self.config.daily_cap - self.store.count_blocked_today(), 0)
+        # The daily cap guards the (anti-bot-sensitive) block action only, and only
+        # when set: daily_cap <= 0 means unlimited (the default).
+        cap = self.config.daily_cap
+        if is_block and cap > 0:
+            start_remaining = max(cap - self.store.count_blocked_today(), 0)
             if start_remaining <= 0:
-                logger.warning("daily cap reached (%d); nothing to do", self.config.daily_cap)
-                print(f"Daily cap reached ({self.config.daily_cap}). Nothing to do.")
+                logger.warning("daily cap reached (%d); nothing to do", cap)
+                print(f"Daily cap reached ({cap}). Nothing to do.")
                 return []
         else:
             start_remaining = len(targets)
