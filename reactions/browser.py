@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -18,7 +19,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fi
 from toolz import curry, pipe
 from toolz.curried import filter as cfilter, map as cmap, unique
 
-from reactions._js import JS_HELPERS
+from reactions._js import JS_COLLECT_LOOP, JS_HELPERS, JS_SLEEP
 from reactions.config import ReactionConfig
 from reactions.extractor import normalize_url_with_keys, parse_reactor
 from reactions.models import RawReactorCandidate, ReactorRecord, SessionStats
@@ -39,10 +40,20 @@ logger = logging.getLogger(__name__)
 
 # Click the post's reaction-summary control to open the "who reacted" dialog.
 # A permalink page contains many reaction summaries (the post, its comments, and
-# other posts), so Strategy A collects every summary, reads its reaction COUNT
-# from the visible text (Facebook renders "NaN" in the aria-label but the real
-# number in the text), and clicks the highest-count one -- i.e. the post itself.
-# Strategy B falls back to a reaction emoji's nearest clickable ancestor.
+# other posts), so Strategy A collects every summary, reads its reaction COUNT, and
+# clicks the highest-count one -- i.e. the post itself. Facebook labels these two
+# different ways, and the count lives in a DIFFERENT place for each:
+#   * "see who reacted" phrase controls (comments/secondary): aria-label is
+#     "...who reacted"/"...من التفاعلات" with "NaN" for the number, and the real
+#     count is in the visible TEXT.
+#   * reaction-emoji summaries (the post's engagement bar): aria-label is
+#     "<reaction>: <N> people" (e.g. "أعجبني: 306 أشخاص") -- the count is in the
+#     ARIA-LABEL and the text is empty.
+# We must read the count from the right place for each, and crucially NOT confuse a
+# reaction-emoji summary with the like/react TOGGLE button (aria "Remove Like" /
+# "إزالة أعجبني"), whose visible text shows the post's total: the toggle has no
+# number IN its aria, so requiring a count in the aria for reaction-name controls
+# excludes it. Strategy B falls back to a reaction emoji's nearest clickable ancestor.
 OPEN_REACTIONS_SCRIPT = (
     "(args) => {"
     + JS_HELPERS
@@ -52,14 +63,26 @@ OPEN_REACTIONS_SCRIPT = (
   const summaryPatterns = args.summaryPatterns.map(lc);
   const reactionLabels = args.reactionLabels.map(lc);
 
-  // Strategy A: pick the highest-count reaction summary.
+  // Strategy A: click the highest-count reaction summary on the page (the post's
+  // own summary outranks any comment's). For a summary-phrase control the count is
+  // in the text; for a reaction-emoji summary it is in the aria-label. A
+  // reaction-name control with NO number in its aria is the like/react toggle, so
+  // it is skipped (ok stays false).
   const summaries = [...document.querySelectorAll('[role="button"]')]
     .filter(visible)
-    .filter((el) => {
-      const aria = lc(el.getAttribute('aria-label'));
-      return aria && summaryPatterns.some((p) => p && aria.includes(p));
+    .map((el) => {
+      const ariaRaw = el.getAttribute('aria-label') || '';
+      const aria = lc(ariaRaw);
+      let count = 0, ok = false;
+      if (aria && summaryPatterns.some((p) => p && aria.includes(p))) {
+        count = toCount(el.innerText); ok = true;
+      } else if (aria && reactionLabels.some((p) => p && aria.includes(p))) {
+        const ariaCount = toCount(ariaRaw);
+        if (ariaCount > 0) { count = ariaCount; ok = true; }
+      }
+      return { el, count, ok, top: el.getBoundingClientRect().top };
     })
-    .map((el) => ({ el, count: toCount(el.innerText), top: el.getBoundingClientRect().top }));
+    .filter((c) => c.ok);
   if (summaries.length) {
     summaries.sort((a, b) => (b.count - a.count) || (a.top - b.top));
     const best = summaries[0];
@@ -84,6 +107,25 @@ OPEN_REACTIONS_SCRIPT = (
     }
   }
   return null;
+}
+"""
+)
+
+# True once the reactions dialog has actually rendered content. Uses findDialog (so
+# it ignores other dialogs a permalink shows -- notifications, etc., several of
+# which are hidden) and accepts either per-type tabs or at least one reactor-name
+# anchor, which also covers a single "All" list dialog that has no tabs.
+DIALOG_READY_SCRIPT = (
+    "() => {"
+    + JS_HELPERS
+    + """
+  const d = findDialog();
+  if (!d) return false;
+  if (d.querySelector('[role="tab"]')) return true;
+  for (const a of d.querySelectorAll('a[href]')) {
+    if (norm(a.innerText)) return true;
+  }
+  return false;
 }
 """
 )
@@ -119,7 +161,63 @@ CLICK_TAB_SCRIPT = (
   if (!dialog) return false;
   const tabs = [...dialog.querySelectorAll('[role="tab"]')];
   if (index < 0 || index >= tabs.length) return false;
+  tabs[index].scrollIntoView({ block: 'nearest', inline: 'center' });
   tabs[index].click();
+  return true;
+}
+"""
+)
+
+# Whether the tab at ``index`` is the active (aria-selected) one. Facebook collapses
+# the lower-count reaction tabs under a "More" overflow: their [role="tab"] exists in
+# the DOM but a direct click does not switch the list, so we detect that here and
+# fall back to the overflow menu.
+TAB_SELECTED_SCRIPT = (
+    "(index) => {"
+    + JS_HELPERS
+    + """
+  const dialog = findDialog();
+  if (!dialog) return false;
+  const tabs = [...dialog.querySelectorAll('[role="tab"]')];
+  return index >= 0 && index < tabs.length && tabs[index].getAttribute('aria-selected') === 'true';
+}
+"""
+)
+
+# Open the "More" (المزيد) reaction-tab overflow menu, if present.
+OPEN_MORE_MENU_SCRIPT = (
+    "(moreLabels) => {"
+    + JS_HELPERS
+    + """
+  const dialog = findDialog();
+  if (!dialog) return false;
+  const labels = moreLabels.map(lc);
+  const more = [...dialog.querySelectorAll('[role="tab"]')].find((t) => {
+    const blob = lc(t.innerText) + ' ' + lc(t.getAttribute('aria-label'));
+    return labels.some((l) => l && blob.includes(l));
+  });
+  if (!more) return false;
+  more.scrollIntoView({ block: 'nearest', inline: 'center' });
+  more.click();
+  return true;
+}
+"""
+)
+
+# Click the overflow-menu item (role=menuitemradio) whose aria-label names one of the
+# given reaction labels -- the way to select a tab that lives under "More".
+CLICK_OVERFLOW_ITEM_SCRIPT = (
+    "(labels) => {"
+    + JS_HELPERS
+    + """
+  const wanted = labels.map(lc);
+  const items = [...document.querySelectorAll('[role="menuitemradio"], [role="menuitem"]')].filter(visible);
+  const hit = items.find((it) => {
+    const aria = lc(it.getAttribute('aria-label'));
+    return aria && wanted.some((l) => l && aria.includes(l));
+  });
+  if (!hit) return false;
+  hit.click();
   return true;
 }
 """
@@ -133,7 +231,10 @@ SCROLL_AND_COLLECT_SCRIPT = (
     + """
   const dialog = findDialog();
   if (!dialog) return { rows: [], atBottom: true, found: false };
-  const container = scrollContainer(dialog);
+  // Mirror the live engine's container choice (reactor-anchor ancestry first),
+  // and surface how many candidates exist so inspect mode can confirm selection.
+  const candidates = scrollCandidates(dialog);
+  const container = candidates[0] || null;
   const scope = container || dialog;
   const rows = [];
   const seen = new Set();
@@ -160,59 +261,22 @@ SCROLL_AND_COLLECT_SCRIPT = (
       atBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 4;
     }
   }
-  return { rows, atBottom, found: true, hasContainer: !!container, scrollHeight };
+  return { rows, atBottom, found: true, hasContainer: !!container, candidateCount: candidates.length, scrollHeight };
 }
 """
 )
 
 # Collect every reactor in the active tab. The dialog list is VIRTUALIZED (rows
-# are removed from the DOM once scrolled past), so we accumulate into a Map from
-# inside a single in-page loop, recording rows *before* each small overlapping
-# scroll step -- this is immune to the cross-call timing gaps that made jump
-# scrolling miss batches. Returns the full de-duplicated row set in one call.
+# are removed from the DOM once scrolled past), so the shared JS_COLLECT_LOOP
+# accumulates into a Map while scrolling the list to the bottom. The per-row
+# extractor here yields {profile_url, name}; Python normalizes + dedups by profile
+# id downstream (avatars are ignored on this CLI path).
 COLLECT_TAB_SCRIPT = (
     "async (args) => {"
     + JS_HELPERS
-    + """
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const dialog = findDialog();
-  if (!dialog) return [];
-  const container = scrollContainer(dialog);
-  const scope = container || dialog;
-  const found = new Map();  // full href -> name (Python normalizes + dedups by profile id)
-  const collect = () => {
-    for (const a of scope.querySelectorAll('a[href]')) {
-      const name = norm(a.innerText);
-      if (!name || name.length > 120) continue;
-      if (!found.has(a.href)) found.set(a.href, name);
-    }
-  };
-  if (!container) {
-    collect();
-    return [...found].map(([href, name]) => ({ profile_url: href, name }));
-  }
-  let lastSize = -1;
-  let stable = 0;
-  for (let i = 0; i < args.maxRounds; i++) {
-    collect();
-    const before = container.scrollTop;
-    container.scrollTop = Math.min(
-      container.scrollHeight, before + Math.max(container.clientHeight * 0.5, 200)
-    );
-    await sleep(args.sleepMs);
-    const atBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 4;
-    if (found.size === lastSize && atBottom) {
-      stable += 1;
-      if (stable >= args.stableNeeded) break;
-    } else {
-      stable = 0;
-    }
-    lastSize = found.size;
-  }
-  collect();
-  return [...found].map(([href, name]) => ({ profile_url: href, name }));
-}
-"""
+    + JS_SLEEP
+    + JS_COLLECT_LOOP.replace("__EXTRACT__", "{ profile_url: a.href, name: name }")
+    + "}"
 )
 
 
@@ -345,6 +409,80 @@ def collect_records(
     )
 
 
+def open_reactions_dialog(page: Page, config: ReactionConfig) -> int:
+    """Click the post's reaction summary and wait for the "who reacted" dialog.
+
+    Shared by :class:`ReactionScraper` and the Streamlit UI fetch
+    (:mod:`reactions.ui_fetch`) so both open the dialog identically. Raises if the
+    reaction-summary control can't be found (run ``inspect`` mode to refresh
+    selectors); tolerates a dialog that renders a single list with no tabs.
+
+    Returns the reaction count Facebook showed on the clicked summary (``'summary:510'``
+    -> ``510``), or ``0`` if none was parseable. Callers use it as a completeness
+    target when the dialog has no per-type tabs to sum badges from.
+    """
+    strategy = page.evaluate(
+        OPEN_REACTIONS_SCRIPT,
+        {
+            "summaryPatterns": list(REACTION_SUMMARY_LABELS),
+            "reactionLabels": [label for labels in REACTION_LABELS.values() for label in labels],
+        },
+    )
+    if not strategy:
+        raise RuntimeError(
+            "Could not find the reaction-summary control. Run `inspect` mode to "
+            "capture the live aria-labels and update reactions/selectors.py."
+        )
+    # Wait for the reactions dialog itself to render -- via findDialog, so other
+    # dialogs on the page (e.g. a hidden "Notifications" dialog that a raw
+    # '[role="dialog"]' selector would match first) don't cause a false timeout.
+    # Tolerates a single-list dialog with no tabs.
+    try:
+        page.wait_for_function(DIALOG_READY_SCRIPT, timeout=config.dialog_timeout_ms)
+    except TimeoutError:
+        pass  # proceed; the collect loop no-ops if the dialog is genuinely empty
+    page.wait_for_timeout(config.settle_timeout_ms)
+    match = re.search(r"(\d+)\s*$", strategy)
+    return int(match.group(1)) if match else 0
+
+
+# Labels for the "More" reaction-tab overflow control (Facebook collapses the
+# lower-count reaction tabs behind it).
+MORE_TAB_LABELS: tuple[str, ...] = ("More", "Show more", "المزيد", "عرض المزيد")
+
+
+def select_reaction_tab(
+    page: Page, config: ReactionConfig, index: int, reaction_type: str
+) -> bool:
+    """Activate the reaction tab at ``index`` and return True once it is selected.
+
+    Facebook shows only the top few reaction tabs and hides the rest under a "More"
+    (المزيد) overflow whose ``[role="tab"]`` is in the DOM but does NOT switch the
+    list on a direct click. So we click the tab and, if it did not become selected,
+    open "More" and click the overflow menu item (``role="menuitemradio"``) whose
+    aria-label names this ``reaction_type``. ``index < 0`` (a tab-less single-list
+    dialog) is a no-op success. Shared by the CLI scraper and the Streamlit fetch so
+    both walk the tabs identically.
+    """
+    if index < 0:
+        return True
+    # Try the "More" overflow menu FIRST. It holds the lower-count reaction tabs, and
+    # directly clicking an overflow tab poisons the "More" button so it won't open
+    # afterwards -- so we never click an overflow tab. If this reaction isn't in the
+    # overflow (i.e. it's a directly-visible tab), dismiss the menu and click the tab.
+    labels = list(REACTION_LABELS.get(reaction_type, ()))
+    if labels and page.evaluate(OPEN_MORE_MENU_SCRIPT, list(MORE_TAB_LABELS)):
+        page.wait_for_timeout(config.settle_timeout_ms)
+        if page.evaluate(CLICK_OVERFLOW_ITEM_SCRIPT, labels):
+            page.wait_for_timeout(config.settle_timeout_ms)
+            return True
+        page.keyboard.press("Escape")  # not an overflow reaction; close the menu
+        page.wait_for_timeout(config.settle_timeout_ms)
+    page.evaluate(CLICK_TAB_SCRIPT, index)
+    page.wait_for_timeout(config.settle_timeout_ms)
+    return bool(page.evaluate(TAB_SELECTED_SCRIPT, index))
+
+
 class ReactionScraper:
     """Open a post, open the reactions dialog, and collect reactors per type."""
 
@@ -369,8 +507,8 @@ class ReactionScraper:
                     page_locale=page.locator("html").get_attribute("lang"),
                     logged_out=is_login_wall(page.locator("body").inner_text()),
                 )
-                self._open_dialog(page, session_id)
-                self._scrape_all_tabs(page, session_id)
+                summary_count = self._open_dialog(page, session_id)
+                self._scrape_all_tabs(page, session_id, summary_count)
         except Exception as exc:  # noqa: BLE001 - recorded then re-raised
             status, notes = "failed", str(exc)
             self.stats.failures += 1
@@ -381,40 +519,29 @@ class ReactionScraper:
             self.store.finish_session(session_id, status, self.stats, notes=notes)
         return session_id, self.stats
 
-    def _open_dialog(self, page: Page, session_id: int) -> None:
-        strategy = page.evaluate(
-            OPEN_REACTIONS_SCRIPT,
-            {
-                "summaryPatterns": list(REACTION_SUMMARY_LABELS),
-                "reactionLabels": [label for labels in REACTION_LABELS.values() for label in labels],
-            },
-        )
-        if not strategy:
-            raise RuntimeError(
-                "Could not find the reaction-summary control. Run `inspect` mode to "
-                "capture the live aria-labels and update reactions/selectors.py."
-            )
-        try:
-            page.wait_for_selector(
-                '[role="dialog"] [role="tab"]', timeout=self.config.dialog_timeout_ms
-            )
-        except TimeoutError:
-            # Some posts open a dialog with a single list and no tabs; tolerate it.
-            page.wait_for_selector('[role="dialog"]', timeout=self.config.dialog_timeout_ms)
-        page.wait_for_timeout(self.config.settle_timeout_ms)
+    def _open_dialog(self, page: Page, session_id: int) -> int:
+        return open_reactions_dialog(page, self.config)
 
-    def _scrape_all_tabs(self, page: Page, session_id: int) -> None:
+    def _scrape_all_tabs(self, page: Page, session_id: int, summary_count: int = 0) -> None:
         # Pure target selection (which tabs, in what order, with Facebook's own
         # badge count) is factored into select_targets; here we only drive effects.
         targets = select_targets(page.evaluate(ENUM_TABS_SCRIPT))
         for index, reaction_type, badge in targets:
-            if index >= 0:
-                page.evaluate(CLICK_TAB_SCRIPT, index)
-                page.wait_for_timeout(self.config.settle_timeout_ms)
-            captured = self._scrape_active_tab(page, session_id, reaction_type)
+            if not select_reaction_tab(page, self.config, index, reaction_type):
+                logger.warning("could not activate %s tab (index %d); skipping", reaction_type, index)
+                continue
+            # The scroll loop stops once it has gathered this many reactors: the
+            # tab's own badge, or (for a tab-less "All" dialog) the summary count.
+            target = badge or summary_count
+            captured = self._scrape_active_tab(page, session_id, reaction_type, target)
             self.stats.per_type_counts[reaction_type] = captured
             if badge:
                 self.stats.per_type_expected[reaction_type] = badge
+        # A tab-less dialog (single "All" list) has no per-type badge to compare
+        # against; fall back to the count Facebook showed on the summary we clicked
+        # so the undercount check still fires.
+        if summary_count and not self.stats.per_type_expected and len(targets) == 1:
+            self.stats.per_type_expected[targets[0][1]] = summary_count
         self._warn_on_undercount()
 
     def _warn_on_undercount(self) -> None:
@@ -436,27 +563,33 @@ class ReactionScraper:
                     gap,
                 )
 
-    def _collect_active_tab(self, page: Page, reaction_type: str) -> list[ReactorRecord]:
+    def _collect_active_tab(
+        self, page: Page, reaction_type: str, target: int = 0
+    ) -> list[ReactorRecord]:
         """Run the virtualization-safe in-page collector (the effects), then hand
         the raw rows to the pure :func:`collect_records` pipeline for normalization
-        and de-duplication. Exceptions propagate to the caller, which records them.
+        and de-duplication. ``target`` is the reactor count to scroll until (the
+        tab's badge). Exceptions propagate to the caller, which records them.
         """
         locale = page.locator("html").get_attribute("lang")
         rows = page.evaluate(
             COLLECT_TAB_SCRIPT,
             {
+                "target": target,
                 "maxRounds": self.config.max_scroll_rounds,
-                "sleepMs": 350,
+                "sleepMs": 700,  # dwell long enough for a lazy-loaded batch to render
                 "stableNeeded": self.config.max_idle_rounds,
             },
         )
         self.stats.discovered_rows += len(rows)
         return collect_records(self.config.post_url, reaction_type, locale, rows)
 
-    def _scrape_active_tab(self, page: Page, session_id: int, reaction_type: str) -> int:
+    def _scrape_active_tab(
+        self, page: Page, session_id: int, reaction_type: str, target: int = 0
+    ) -> int:
         """Collect every reactor in the active tab (virtualization-safe) and store."""
         try:
-            records = self._collect_active_tab(page, reaction_type)
+            records = self._collect_active_tab(page, reaction_type, target)
         except Exception as exc:  # noqa: BLE001
             self.stats.failures += 1
             logger.warning("collect failed for %s tab: %s", reaction_type, exc)

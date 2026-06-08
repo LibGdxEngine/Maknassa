@@ -31,9 +31,11 @@ from toolz import curry
 REACTION_LABELS: dict[str, tuple[str, ...]] = {
     "like": ("Like", "أعجبني"),
     "love": ("Love", "أحببته", "أحبه"),
-    "care": ("Care", "أهتم", "يهمني"),
+    # The Care reaction localizes as "Support" / "أدعمه" on some posts.
+    "care": ("Care", "Support", "أهتم", "يهمني", "أدعمه"),
     "haha": ("Haha", "هاهاها", "هاها"),
-    "wow": ("Wow", "أدهشني", "واو"),
+    # "واااو" is the elongated live spelling of Wow (the short "واو" never matches it).
+    "wow": ("Wow", "أدهشني", "واااو", "واو"),
     "sad": ("Sad", "Sorry", "أحزنني", "حزين"),
     "angry": ("Angry", "أغضبني", "غاضب"),
 }
