@@ -1,0 +1,308 @@
+from __future__ import annotations
+
+import argparse
+import logging
+from pathlib import Path
+
+from reactions.blocker import ProfileBlocker
+from reactions.browser import (
+    ReactionScraper,
+    dump_inspection,
+    login_flow,
+    write_inspection,
+)
+from reactions.config import ReactionConfig
+from reactions.selectors import REACTION_LABELS
+from reactions.storage import SQLiteStore
+
+VALID_REACTIONS = set(REACTION_LABELS) | {"all", "unknown"}
+
+
+def _add_verbose(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Log INFO-level progress (warnings/errors always show)",
+    )
+
+
+def _add_common(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("post_url", help="Facebook post URL")
+    parser.add_argument("--db-path", default="reactions.db", help="SQLite database path")
+    parser.add_argument(
+        "--profile-dir",
+        default=".profiles/facebook",
+        help="Persistent Playwright profile dir (login persists here)",
+    )
+    parser.add_argument("--headless", action="store_true", help="Run browser headless")
+    _add_verbose(parser)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="reactions",
+        description="Scrape Facebook post reactions and selectively block reactors.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    login = sub.add_parser("login", help="One-time: open Facebook headed and wait for you to log in")
+    login.add_argument(
+        "--profile-dir",
+        default=".profiles/facebook",
+        help="Persistent Playwright profile dir (login persists here)",
+    )
+    login.add_argument("--timeout", type=int, default=300, help="Seconds to wait for login")
+    _add_verbose(login)
+
+    scrape = sub.add_parser("scrape", help="Collect reactors (per reaction type) into SQLite")
+    _add_common(scrape)
+    scrape.add_argument("--max-idle-rounds", type=int, default=3)
+    scrape.add_argument("--max-scroll-rounds", type=int, default=200)
+
+    block = sub.add_parser("block", help="Block a reaction category or named people (dry-run by default)")
+    _add_common(block)
+    block.add_argument(
+        "--reaction",
+        default="",
+        help="Comma-separated reaction types to target, e.g. angry,haha",
+    )
+    block.add_argument("--name", action="append", default=[], help="Target by (partial) name; repeatable")
+    block.add_argument("--all", action="store_true", help="Target every scraped reactor for this post")
+    block.add_argument("--execute", action="store_true", help="Actually block (default is a dry-run preview)")
+    block.add_argument("--no-confirm", action="store_true", help="Skip the per-person prompt when executing")
+    block.add_argument("--include-blocked", action="store_true", help="Re-include already-blocked reactors")
+    block.add_argument("--daily-cap", type=int, default=50)
+    block.add_argument("--min-delay", type=float, default=8.0, help="Min seconds between blocks")
+    block.add_argument("--max-delay", type=float, default=25.0, help="Max seconds between blocks")
+
+    unblock = sub.add_parser("unblock", help="Unblock previously-blocked reactors (dry-run by default)")
+    _add_common(unblock)
+    unblock.add_argument("--reaction", default="", help="Comma-separated reaction types to target")
+    unblock.add_argument("--name", action="append", default=[], help="Target by (partial) name; repeatable")
+    unblock.add_argument("--all", action="store_true", help="Target every blocked reactor for this post")
+    unblock.add_argument("--execute", action="store_true", help="Actually unblock (default is a dry-run preview)")
+    unblock.add_argument("--no-confirm", action="store_true", help="Skip the per-person prompt when executing")
+
+    def _add_url_action(name: str, verb: str) -> argparse.ArgumentParser:
+        parser_ = sub.add_parser(name, help=f"{verb.capitalize()} profile URL(s) directly (no scrape/DB)")
+        parser_.add_argument("profile_urls", nargs="+", help=f"Profile URL(s) to {verb}")
+        parser_.add_argument(
+            "--profile-dir", default=".profiles/facebook", help="Persistent Playwright profile dir"
+        )
+        parser_.add_argument("--headless", action="store_true", help="Run browser headless")
+        parser_.add_argument("--execute", action="store_true", help=f"Actually {verb} (default is a dry-run)")
+        _add_verbose(parser_)
+        return parser_
+
+    block_url = _add_url_action("block-url", "block")
+    block_url.add_argument("--min-delay", type=float, default=8.0, help="Min seconds between blocks")
+    block_url.add_argument("--max-delay", type=float, default=25.0, help="Max seconds between blocks")
+    _add_url_action("unblock-url", "unblock")
+
+    inspect = sub.add_parser("inspect", help="Dump live DOM roles/aria-labels to confirm selectors")
+    _add_common(inspect)
+    inspect.add_argument("--profile-url", default=None, help="Also dump a profile's action buttons/menu")
+    inspect.add_argument("--out", default=None, help="Write the JSON report to this path")
+
+    return parser
+
+
+def _config_from_args(args: argparse.Namespace) -> ReactionConfig:
+    return ReactionConfig(
+        post_url=args.post_url,
+        db_path=Path(args.db_path).expanduser().resolve(),
+        profile_dir=Path(args.profile_dir).expanduser().resolve(),
+        headless=bool(args.headless),
+        max_idle_rounds=getattr(args, "max_idle_rounds", 3),
+        max_scroll_rounds=getattr(args, "max_scroll_rounds", 200),
+        dry_run=not getattr(args, "execute", False),
+        confirm_each=not getattr(args, "no_confirm", False),
+        daily_cap=getattr(args, "daily_cap", 50),
+        block_min_delay_s=getattr(args, "min_delay", 8.0),
+        block_max_delay_s=getattr(args, "max_delay", 25.0),
+    )
+
+
+def _cmd_scrape(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    store = SQLiteStore(config.db_path)
+    scraper = ReactionScraper(config, store)
+    session_id, stats = scraper.run()
+    print(
+        f"session_id={session_id} stored={stats.stored_reactors} "
+        f"duplicates={stats.duplicate_reactors} discovered_rows={stats.discovered_rows} "
+        f"failures={stats.failures}"
+    )
+    if stats.per_type_counts:
+        print("per reaction type (captured / reacted):")
+        for reaction_type, count in sorted(stats.per_type_counts.items()):
+            expected = stats.per_type_expected.get(reaction_type)
+            if expected and expected != count:
+                gap = expected - count
+                print(f"  {reaction_type:8} {count}/{expected}  ({gap} with no linkable profile)")
+            else:
+                print(f"  {reaction_type:8} {count}")
+    return 0
+
+
+def _cmd_block(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    store = SQLiteStore(config.db_path)
+
+    reaction_types = [r.strip().lower() for r in args.reaction.split(",") if r.strip()]
+    for reaction in reaction_types:
+        if reaction not in VALID_REACTIONS:
+            print(f"warning: unknown reaction type '{reaction}' (valid: {sorted(VALID_REACTIONS)})")
+    if not reaction_types and not args.name and not args.all:
+        print("Refusing to target everyone implicitly. Pass --reaction, --name, or --all.")
+        return 2
+
+    targets = store.fetch_reactors(
+        post_url=config.post_url,
+        reaction_types=reaction_types or None,
+        names=args.name or None,
+        include_blocked=args.include_blocked,
+    )
+    if not targets:
+        print("No matching reactors found. Run `scrape` first, or relax the filters.")
+        return 0
+
+    blocker = ProfileBlocker(config, store)
+    if config.dry_run:
+        print(f"DRY RUN — {len(targets)} reactor(s) WOULD be blocked (pass --execute to act):")
+        for outcome in blocker.preview(targets):
+            print(f"  [{outcome.detail or '?':8}] {outcome.name or '(no name)'}  {outcome.profile_url}")
+        print("\nNothing was blocked. Re-run with --execute to perform the blocks.")
+        return 0
+
+    print(f"EXECUTING blocks for {len(targets)} reactor(s) (cap {config.daily_cap}/day)...")
+    outcomes = blocker.execute(targets)
+    blocked = sum(1 for o in outcomes if o.status == "blocked")
+    failed = sum(1 for o in outcomes if o.status == "failed")
+    skipped = sum(1 for o in outcomes if o.status == "skipped")
+    for outcome in outcomes:
+        print(f"  {outcome.status:8} {outcome.name or '(no name)'}  {outcome.detail or ''}")
+    print(f"\nblocked={blocked} skipped={skipped} failed={failed}")
+    return 0
+
+
+def _cmd_login(args: argparse.Namespace) -> int:
+    config = ReactionConfig(
+        post_url="",
+        db_path=Path("reactions.db").resolve(),
+        profile_dir=Path(args.profile_dir).expanduser().resolve(),
+        headless=False,
+    )
+    c_user = login_flow(config, timeout_s=args.timeout)
+    if c_user:
+        print(f"Logged in (c_user={c_user}). Session saved to {config.profile_dir}")
+        return 0
+    print("Login not detected before timeout. Re-run `login` and finish signing in.")
+    return 1
+
+
+def _cmd_unblock(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    store = SQLiteStore(config.db_path)
+
+    reaction_types = [r.strip().lower() for r in args.reaction.split(",") if r.strip()]
+    if not reaction_types and not args.name and not args.all:
+        print("Refusing to target everyone implicitly. Pass --reaction, --name, or --all.")
+        return 2
+
+    targets = store.fetch_reactors(
+        post_url=config.post_url,
+        reaction_types=reaction_types or None,
+        names=args.name or None,
+        only_blocked=True,
+    )
+    if not targets:
+        print("No blocked reactors match. (Only rows marked blocked can be unblocked.)")
+        return 0
+
+    blocker = ProfileBlocker(config, store)
+    if config.dry_run:
+        print(f"DRY RUN — {len(targets)} reactor(s) WOULD be unblocked (pass --execute to act):")
+        for outcome in blocker.preview(targets):
+            print(f"  [{outcome.detail or '?':8}] {outcome.name or '(no name)'}  {outcome.profile_url}")
+        print("\nNothing was unblocked. Re-run with --execute to perform the unblocks.")
+        return 0
+
+    print(f"EXECUTING unblocks for {len(targets)} reactor(s)...")
+    outcomes = blocker.execute_unblock(targets)
+    unblocked = sum(1 for o in outcomes if o.status == "unblocked")
+    failed = sum(1 for o in outcomes if o.status == "failed")
+    skipped = sum(1 for o in outcomes if o.status == "skipped")
+    for outcome in outcomes:
+        print(f"  {outcome.status:9} {outcome.name or '(no name)'}  {outcome.detail or ''}")
+    print(f"\nunblocked={unblocked} skipped={skipped} failed={failed}")
+    return 0
+
+
+def _print_url_outcomes(outcomes, success: str) -> None:
+    for outcome in outcomes:
+        print(f"  {outcome.status:9} {outcome.profile_url}  {outcome.detail or ''}")
+    done = sum(1 for o in outcomes if o.status == success)
+    failed = sum(1 for o in outcomes if o.status == "failed")
+    print(f"\n{success}={done} failed={failed}")
+
+
+def _cmd_block_url(args: argparse.Namespace) -> int:
+    from reactions.service import FacebookBlocker
+
+    urls = args.profile_urls
+    if not args.execute:
+        print(f"DRY RUN — would block {len(urls)} profile(s) (pass --execute to act):")
+        for url in urls:
+            print(f"  {url}")
+        return 0
+    with FacebookBlocker(
+        args.profile_dir, headless=args.headless, min_delay_s=args.min_delay, max_delay_s=args.max_delay
+    ) as fb:
+        outcomes = fb.block_many(urls)
+    _print_url_outcomes(outcomes, "blocked")
+    return 0
+
+
+def _cmd_unblock_url(args: argparse.Namespace) -> int:
+    from reactions.service import FacebookBlocker
+
+    urls = args.profile_urls
+    if not args.execute:
+        print(f"DRY RUN — would unblock {len(urls)} profile(s) (pass --execute to act):")
+        for url in urls:
+            print(f"  {url}")
+        return 0
+    with FacebookBlocker(args.profile_dir, headless=args.headless) as fb:
+        outcomes = fb.unblock_many(urls)
+    _print_url_outcomes(outcomes, "unblocked")
+    return 0
+
+
+def _cmd_inspect(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    report = dump_inspection(config, profile_url=args.profile_url)
+    write_inspection(report, Path(args.out).expanduser().resolve() if args.out else None)
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    level = logging.INFO if getattr(args, "verbose", False) else logging.WARNING
+    logging.basicConfig(level=level, format="%(levelname)s %(name)s: %(message)s")
+    if args.command == "login":
+        return _cmd_login(args)
+    if args.command == "scrape":
+        return _cmd_scrape(args)
+    if args.command == "block":
+        return _cmd_block(args)
+    if args.command == "unblock":
+        return _cmd_unblock(args)
+    if args.command == "block-url":
+        return _cmd_block_url(args)
+    if args.command == "unblock-url":
+        return _cmd_unblock_url(args)
+    if args.command == "inspect":
+        return _cmd_inspect(args)
+    return 1

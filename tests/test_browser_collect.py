@@ -1,0 +1,92 @@
+"""Unit tests for the store-free collection seam (ReactionScraper._collect_active_tab).
+
+These exercise the row -> normalized-record path with a stubbed Playwright page
+(no live browser, no database), which is exactly what extracting the seam from
+the persistence/store logic made possible.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from reactions.browser import ReactionScraper
+from reactions.config import ReactionConfig
+
+POST_URL = "https://www.facebook.com/some.page/posts/123456789"
+
+
+class _StubLocator:
+    def __init__(self, lang: str | None) -> None:
+        self._lang = lang
+
+    def get_attribute(self, _name: str) -> str | None:
+        return self._lang
+
+
+class _StubPage:
+    """Minimal stand-in for a Playwright Page: returns canned rows + locale."""
+
+    def __init__(self, rows, lang: str | None = "en") -> None:
+        self._rows = rows
+        self._lang = lang
+
+    def locator(self, _selector: str) -> _StubLocator:
+        return _StubLocator(self._lang)
+
+    def evaluate(self, _script, _arg=None):
+        return self._rows
+
+
+def _scraper() -> ReactionScraper:
+    config = ReactionConfig(
+        post_url=POST_URL,
+        db_path=Path("unused.db"),
+        profile_dir=Path("/tmp/unused"),
+    )
+    # store is unused by _collect_active_tab — the whole point of the seam.
+    return ReactionScraper(config, store=None)  # type: ignore[arg-type]
+
+
+def test_collect_dedups_by_profile_id_and_rejects_non_profiles():
+    rows = [
+        {"name": "Ahmed", "profile_url": "https://www.facebook.com/profile.php?id=100012345&__tn__=R"},
+        # Same numeric id (tracking stripped) -> de-duplicated away.
+        {"name": "Ahmed again", "profile_url": "https://www.facebook.com/profile.php?id=100012345"},
+        {"name": "John", "profile_url": "https://www.facebook.com/john.doe.5"},
+        # Non-profile links are rejected by parse_reactor.
+        {"name": "A Group", "profile_url": "https://www.facebook.com/groups/999"},
+        {"name": "A Post", "profile_url": "https://www.facebook.com/some.page/posts/1"},
+        {"name": "No URL", "profile_url": None},
+    ]
+    scraper = _scraper()
+    records = scraper._collect_active_tab(_StubPage(rows), "angry")
+
+    assert {r.profile_key for r in records} == {"100012345", "john.doe.5"}
+    assert all(r.reaction_type == "angry" for r in records)
+    # Every raw row is counted as discovered, even the ones later dropped.
+    assert scraper.stats.discovered_rows == len(rows)
+
+
+def test_collect_propagates_evaluate_errors():
+    """The seam does not swallow errors; the caller (_scrape_active_tab) records them."""
+
+    class _Boom(_StubPage):
+        def evaluate(self, _script, _arg=None):
+            raise RuntimeError("page crashed")
+
+    scraper = _scraper()
+    with pytest.raises(RuntimeError, match="page crashed"):
+        scraper._collect_active_tab(_Boom([]), "like")
+
+
+def test_warn_on_undercount_flags_large_gaps(caplog):
+    scraper = _scraper()
+    scraper.stats.per_type_expected = {"angry": 100, "like": 10}
+    scraper.stats.per_type_counts = {"angry": 40, "like": 9}  # angry: big gap, like: within tolerance
+    with caplog.at_level("WARNING"):
+        scraper._warn_on_undercount()
+    messages = " ".join(r.getMessage() for r in caplog.records)
+    assert "angry" in messages
+    assert "like" not in messages

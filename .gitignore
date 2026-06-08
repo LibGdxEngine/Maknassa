@@ -1,41 +1,18 @@
 # Python
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
-*.so
-.Python
-
-# Virtual environments
 .venv/
-venv/
-ENV/
-env/
-
-# Distribution / packaging
-build/
-dist/
 *.egg-info/
-*.egg
-.eggs/
 
-# Logs and caches
-*.log
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.cache/
+# Playwright persistent profile — contains your Facebook session cookies. NEVER commit.
+.profiles/
 
-# Coverage
-.coverage
-coverage.xml
-htmlcov/
+# Local data / debug artifacts
+*.db
+*.db-wal
+*.db-shm
+debug/
+.omc/
 
-# Jupyter
-.ipynb_checkpoints/
-
-# OS / editor
-.DS_Store
-Thumbs.db
-.idea/
-.vscode/
+# Inspection dumps may contain scraped names/profile data
+inspect*.json

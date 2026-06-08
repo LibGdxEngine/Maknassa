@@ -1,2 +1,0 @@
-"""Facebook comment scraper package."""
-

@@ -1,103 +1,96 @@
-import sqlite3
-import tempfile
-import unittest
-from pathlib import Path
+"""Round-trip tests for SQLiteStore against a temporary database.
 
-from scraper.models import CommentRecord, SessionStats
-from scraper.storage import SQLiteStore
+Replaces the storage test deleted in the comment-scraper -> reaction-scraper
+rewrite; covers session lifecycle, reactor upsert/dedup, blocked-state marking,
+and filtered fetches.
+"""
 
+from __future__ import annotations
 
-class SQLiteStoreTests(unittest.TestCase):
-    def test_upsert_and_finish_session(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "comments.db"
-            store = SQLiteStore(db_path)
-            session_id = store.start_session(
-                post_url="https://www.facebook.com/example/posts/1",
-                auth_mode="persistent_profile",
-                profile_dir=Path(tmpdir) / "profile",
-                headless=False,
-            )
-            store.update_session_context(
-                session_id,
-                canonical_post_url="https://www.facebook.com/example/posts/1?comment_id=1",
-                page_locale="ar",
-                logged_out=True,
-                filtered_comments_notice=True,
-                visible_comment_anchors=3,
-                expansion_clicks=1,
-                unmatched_expand_controls=2,
-                sort_switch_attempted=True,
-                sort_switch_succeeded=True,
-                initial_sort_label="الأكثر ملاءمة",
-                final_sort_label="كل التعليقات",
-                visible_comment_anchors_before_sort=3,
-                visible_comment_anchors_after_sort=5,
-                filtered_comments_notice_before_sort=True,
-                filtered_comments_notice_after_sort=False,
-            )
-            stored = store.upsert_comment(
-                session_id,
-                CommentRecord(
-                    comment_id="1",
-                    parent_comment_id=None,
-                    depth=0,
-                    author_name="Author",
-                    author_profile_url="https://www.facebook.com/author",
-                    author_thumbnail_url="https://www.facebook.com/avatar.jpg",
-                    text="Hello",
-                    timestamp_text="1h",
-                    permalink="https://www.facebook.com/example/posts/1?comment_id=1",
-                ),
-            )
-            self.assertTrue(stored)
-            store.finish_session(
-                session_id,
-                "completed",
-                SessionStats(
-                    discovered_nodes=1,
-                    stored_comments=1,
-                    visible_comment_anchors=3,
-                    expansion_clicks=1,
-                    unmatched_expand_controls=2,
-                ),
-            )
-            connection = sqlite3.connect(db_path)
-            try:
-                comment_count = connection.execute("SELECT COUNT(*) FROM comments").fetchone()[0]
-                session_row = connection.execute(
-                    """
-                    SELECT status, canonical_post_url, page_locale, logged_out,
-                           filtered_comments_notice, visible_comment_anchors,
-                           expansion_clicks, unmatched_expand_controls,
-                           sort_switch_attempted, sort_switch_succeeded,
-                           initial_sort_label, final_sort_label,
-                           visible_comment_anchors_before_sort, visible_comment_anchors_after_sort,
-                           filtered_comments_notice_before_sort, filtered_comments_notice_after_sort
-                    FROM scrape_sessions WHERE id = ?
-                    """,
-                    (session_id,),
-                ).fetchone()
-            finally:
-                connection.close()
-            self.assertEqual(comment_count, 1)
-            self.assertEqual(session_row[0], "completed")
-            self.assertEqual(session_row[1], "https://www.facebook.com/example/posts/1?comment_id=1")
-            self.assertEqual(session_row[2], "ar")
-            self.assertEqual(session_row[3], 1)
-            self.assertEqual(session_row[4], 1)
-            self.assertEqual(session_row[5], 3)
-            self.assertEqual(session_row[6], 1)
-            self.assertEqual(session_row[7], 2)
-            self.assertEqual(session_row[8], 1)
-            self.assertEqual(session_row[9], 1)
-            self.assertEqual(session_row[10], "الأكثر ملاءمة")
-            self.assertEqual(session_row[11], "كل التعليقات")
-            self.assertEqual(session_row[12], 3)
-            self.assertEqual(session_row[13], 5)
-            self.assertEqual(session_row[14], 1)
-            self.assertEqual(session_row[15], 0)
+from reactions.models import ReactorRecord, SessionStats
+from reactions.storage import SQLiteStore
+
+POST_URL = "https://www.facebook.com/some.page/posts/42"
 
 
-if __name__ == "__main__":
-    unittest.main()
+def _record(key: str, name: str, reaction: str = "angry") -> ReactorRecord:
+    return ReactorRecord(
+        profile_id=key,
+        profile_key=key,
+        name=name,
+        profile_url=f"https://www.facebook.com/{key}",
+        reaction_type=reaction,
+        post_url=POST_URL,
+    )
+
+
+def _store(tmp_path) -> SQLiteStore:
+    return SQLiteStore(tmp_path / "reactions.db")
+
+
+def test_upsert_is_insert_then_duplicate(tmp_path):
+    store = _store(tmp_path)
+    sid = store.start_session(POST_URL, tmp_path, headless=False)
+
+    assert store.upsert_reactor(sid, _record("1", "Ann")) is True  # newly inserted
+    assert store.upsert_reactor(sid, _record("1", "Ann (edited)")) is False  # conflict -> update
+
+    rows = store.fetch_reactors(POST_URL)
+    assert len(rows) == 1
+    assert rows[0].name == "Ann (edited)"  # metadata refreshed on conflict
+
+
+def test_mark_blocked_then_filtered_fetch(tmp_path):
+    store = _store(tmp_path)
+    sid = store.start_session(POST_URL, tmp_path, headless=False)
+    store.upsert_reactor(sid, _record("1", "Ann"))
+    store.upsert_reactor(sid, _record("2", "Bob"))
+
+    store.mark_blocked(POST_URL, "1")
+
+    # Default fetch hides blocked rows.
+    unblocked = store.fetch_reactors(POST_URL)
+    assert {r.profile_key for r in unblocked} == {"2"}
+
+    only_blocked = store.fetch_reactors(POST_URL, only_blocked=True)
+    assert [r.profile_key for r in only_blocked] == ["1"]
+    assert only_blocked[0].blocked is True
+
+    # Unblocking restores it to the default view.
+    store.mark_unblocked(POST_URL, "1")
+    assert {r.profile_key for r in store.fetch_reactors(POST_URL)} == {"1", "2"}
+
+
+def test_fetch_filters_by_reaction_and_name(tmp_path):
+    store = _store(tmp_path)
+    sid = store.start_session(POST_URL, tmp_path, headless=False)
+    store.upsert_reactor(sid, _record("1", "Ann", reaction="angry"))
+    store.upsert_reactor(sid, _record("2", "Bob", reaction="haha"))
+    store.upsert_reactor(sid, _record("3", "Annie", reaction="angry"))
+
+    by_type = store.fetch_reactors(POST_URL, reaction_types=["angry"])
+    assert {r.profile_key for r in by_type} == {"1", "3"}
+
+    by_name = store.fetch_reactors(POST_URL, names=["Ann"])  # LIKE %Ann%
+    assert {r.profile_key for r in by_name} == {"1", "3"}
+
+
+def test_finish_session_persists_status_and_counts(tmp_path):
+    store = _store(tmp_path)
+    sid = store.start_session(POST_URL, tmp_path, headless=False)
+    stats = SessionStats(discovered_rows=5, stored_reactors=3, duplicate_reactors=2)
+    stats.per_type_counts = {"angry": 3}
+
+    store.finish_session(sid, "completed", stats, notes="done")
+
+    with store.connect() as conn:
+        row = conn.execute(
+            "SELECT status, stored_reactors, finished_at, per_type_json, notes "
+            "FROM reaction_sessions WHERE id = ?",
+            (sid,),
+        ).fetchone()
+    assert row["status"] == "completed"
+    assert row["stored_reactors"] == 3
+    assert row["finished_at"] is not None
+    assert row["notes"] == "done"
+    assert "angry" in row["per_type_json"]

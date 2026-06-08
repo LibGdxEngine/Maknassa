@@ -1,103 +1,78 @@
-import unittest
+from __future__ import annotations
 
-from scraper.extractor import extract_comment_id, normalize_url, normalize_url_with_keys, parse_comment
-from scraper.models import RawCommentCandidate
+from reactions.extractor import normalize_profile_url, normalize_whitespace, parse_reactor
+from reactions.models import RawReactorCandidate
+
+POST_URL = "https://www.facebook.com/some.page/posts/123456789"
 
 
-class ExtractorTests(unittest.TestCase):
-    def test_normalize_url_keeps_comment_identity_fields(self) -> None:
-        url = normalize_url(
-            "/story.php?story_fbid=12&id=34&comment_id=56&notif_id=999",
-            "https://www.facebook.com/example/posts/12",
+def _candidate(profile_url: str | None, name: str | None, reaction: str = "angry"):
+    return RawReactorCandidate(
+        name_hint=name,
+        profile_url_hint=profile_url,
+        reaction_type=reaction,
+        source_url=POST_URL,
+    )
+
+
+def test_parse_reactor_numeric_profile():
+    record = parse_reactor(
+        _candidate("https://www.facebook.com/profile.php?id=100012345&__tn__=R", "Ahmed Fathy")
+    )
+    assert record is not None
+    assert record.profile_id == "100012345"
+    assert record.profile_key == "100012345"
+    assert record.name == "Ahmed Fathy"
+    assert record.reaction_type == "angry"
+    assert record.profile_url == "https://www.facebook.com/profile.php?id=100012345"
+
+
+def test_parse_reactor_username_profile():
+    record = parse_reactor(_candidate("https://www.facebook.com/john.doe.5", "John Doe", "haha"))
+    assert record is not None
+    assert record.profile_id == "john.doe.5"
+    assert record.profile_url == "https://www.facebook.com/john.doe.5"
+    assert record.reaction_type == "haha"
+
+
+def test_parse_reactor_rejects_non_profile_links():
+    assert parse_reactor(_candidate("https://www.facebook.com/groups/999", "Group")) is None
+    assert parse_reactor(_candidate("https://www.facebook.com/some.page/posts/1", "Post")) is None
+    assert parse_reactor(_candidate(None, "No URL")) is None
+
+
+def test_normalize_whitespace_collapses_and_nulls_empty():
+    assert normalize_whitespace("  Ahmed   Fathy ") == "Ahmed Fathy"
+    assert normalize_whitespace("\tA\nB\r C ") == "A B C"
+    assert normalize_whitespace("   ") is None
+    assert normalize_whitespace("") is None
+    assert normalize_whitespace(None) is None
+
+
+def test_parse_reactor_normalizes_unicode_name():
+    record = parse_reactor(
+        _candidate("https://www.facebook.com/profile.php?id=42", "  أحمد   فتحي  ", "love")
+    )
+    assert record is not None
+    assert record.name == "أحمد فتحي"
+    assert record.reaction_type == "love"
+    assert record.profile_key == "42"
+
+
+def test_parse_reactor_blank_reaction_defaults_to_unknown():
+    record = parse_reactor(_candidate("https://www.facebook.com/john.doe.5", "John", reaction=""))
+    assert record is not None
+    assert record.reaction_type == "unknown"
+
+
+def test_normalize_profile_url_keeps_id_drops_tracking():
+    assert (
+        normalize_profile_url(
+            "https://www.facebook.com/profile.php?id=42&__cft__[0]=abc&__tn__=R", POST_URL
         )
-        self.assertEqual(url, "https://www.facebook.com/story.php?comment_id=56&story_fbid=12&id=34")
-
-    def test_extract_comment_id_from_permalink(self) -> None:
-        self.assertEqual(
-            extract_comment_id("https://www.facebook.com/example/posts/123?comment_id=987654321"),
-            "987654321",
-        )
-
-    def test_normalize_profile_url_drops_tracking_and_comment_query(self) -> None:
-        url = normalize_url_with_keys(
-            "https://www.facebook.com/author.name?comment_id=encoded&__tn__=R]-R",
-            "https://www.facebook.com/example/posts/123",
-            keep_query_keys=(),
-        )
-        self.assertEqual(url, "https://www.facebook.com/author.name")
-
-    def test_parse_comment_uses_parent_hint_and_depth(self) -> None:
-        candidate = RawCommentCandidate(
-            node_key="node-1",
-            outer_html="""
-            <article data-commentid="999">
-              <img src="/avatar.jpg" />
-              <strong><a href="/author.profile">Author Name</a></strong>
-              <div data-ad-preview="message">This is a nested reply</div>
-              <a href="/example/posts/111?comment_id=999">4h</a>
-            </article>
-            """,
-            depth_hint=2,
-            parent_comment_id_hint="123",
-            permalink_hint=None,
-            author_name_hint="Author Name",
-            author_profile_url_hint="/author.profile?comment_id=encoded",
-            author_thumbnail_url_hint="/avatar.jpg?foo=1",
-            text_hint="This is a nested reply",
-            timestamp_text_hint="4h",
-            source_url="https://www.facebook.com/example/posts/111",
-        )
-        record = parse_comment(candidate)
-        self.assertIsNotNone(record)
-        assert record is not None
-        self.assertEqual(record.comment_id, "999")
-        self.assertEqual(record.parent_comment_id, "123")
-        self.assertEqual(record.depth, 2)
-        self.assertEqual(record.author_name, "Author Name")
-        self.assertEqual(record.author_profile_url, "https://www.facebook.com/author.profile")
-        self.assertEqual(record.author_thumbnail_url, "https://www.facebook.com/avatar.jpg")
-        self.assertEqual(record.text, "This is a nested reply")
-        self.assertEqual(record.timestamp_text, "4h")
-
-    def test_parse_comment_prefers_timestamp_permalink_over_author_anchor(self) -> None:
-        candidate = RawCommentCandidate(
-            node_key="node-3",
-            outer_html="""
-            <div>
-              <a href="/person?comment_id=Y29tbWVudDo=">Author Name</a>
-              <div data-ad-preview="message">Actual comment body</div>
-              <a href="/post/1?comment_id=2468">1d</a>
-            </div>
-            """,
-            depth_hint=0,
-            parent_comment_id_hint=None,
-            permalink_hint="https://www.facebook.com/post/1?comment_id=2468",
-            author_name_hint="Author Name",
-            author_profile_url_hint="https://www.facebook.com/person?comment_id=Y29tbWVudDo=",
-            text_hint="Actual comment body",
-            timestamp_text_hint="1d",
-            source_url="https://www.facebook.com/post/1",
-        )
-        record = parse_comment(candidate)
-        self.assertIsNotNone(record)
-        assert record is not None
-        self.assertEqual(record.comment_id, "2468")
-        self.assertEqual(record.author_name, "Author Name")
-        self.assertEqual(record.timestamp_text, "1d")
-        self.assertEqual(record.text, "Actual comment body")
-        self.assertEqual(record.author_profile_url, "https://www.facebook.com/person")
-
-    def test_parse_comment_returns_none_when_no_content_found(self) -> None:
-        candidate = RawCommentCandidate(
-            node_key="node-2",
-            outer_html="<div></div>",
-            depth_hint=0,
-            parent_comment_id_hint=None,
-            permalink_hint=None,
-            source_url="https://www.facebook.com/example/posts/111",
-        )
-        self.assertIsNone(parse_comment(candidate))
-
-
-if __name__ == "__main__":
-    unittest.main()
+        == "https://www.facebook.com/profile.php?id=42"
+    )
+    assert (
+        normalize_profile_url("https://www.facebook.com/john.doe.5?ref=tag", POST_URL)
+        == "https://www.facebook.com/john.doe.5"
+    )
