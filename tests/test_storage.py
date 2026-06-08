@@ -8,7 +8,7 @@ and filtered fetches.
 from __future__ import annotations
 
 from reactions.models import ReactorRecord, SessionStats
-from reactions.storage import SQLiteStore
+from reactions.storage import SQLiteStore, build_fetch_query
 
 POST_URL = "https://www.facebook.com/some.page/posts/42"
 
@@ -26,6 +26,23 @@ def _record(key: str, name: str, reaction: str = "angry") -> ReactorRecord:
 
 def _store(tmp_path) -> SQLiteStore:
     return SQLiteStore(tmp_path / "reactions.db")
+
+
+def test_build_fetch_query_is_pure():
+    """The extracted query builder needs no DB and no connection."""
+    sql, params = build_fetch_query(
+        POST_URL, reaction_types=["angry", "haha"], names=["Ann"], only_blocked=True
+    )
+    assert "reaction_type IN (?, ?)" in sql
+    assert "name LIKE ?" in sql
+    assert "blocked = 1" in sql
+    assert params == [POST_URL, "angry", "haha", "%Ann%"]
+
+
+def test_build_fetch_query_default_hides_blocked():
+    sql, params = build_fetch_query(POST_URL)
+    assert "blocked = 0" in sql
+    assert params == [POST_URL]
 
 
 def test_upsert_is_insert_then_duplicate(tmp_path):

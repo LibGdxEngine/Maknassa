@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from reactions.browser import ReactionScraper
+from reactions.browser import ReactionScraper, collect_records, select_targets
 from reactions.config import ReactionConfig
 
 POST_URL = "https://www.facebook.com/some.page/posts/123456789"
@@ -69,6 +69,28 @@ def test_collect_dedups_by_profile_id_and_rejects_non_profiles():
     assert scraper.stats.discovered_rows == len(rows)
 
 
+def test_collect_records_pure_pipeline_dedups_and_rejects():
+    """The extracted pure pipeline runs with no scraper, page, or DB at all."""
+    rows = [
+        {"name": "Ahmed", "profile_url": "https://www.facebook.com/profile.php?id=100012345&__tn__=R"},
+        {"name": "Ahmed again", "profile_url": "https://www.facebook.com/profile.php?id=100012345"},
+        {"name": "John", "profile_url": "https://www.facebook.com/john.doe.5"},
+        {"name": "A Group", "profile_url": "https://www.facebook.com/groups/999"},
+        {"name": "No URL", "profile_url": None},
+    ]
+    records = collect_records(POST_URL, "love", "ar", rows)
+    assert [r.profile_key for r in records] == ["100012345", "john.doe.5"]
+    assert all(r.reaction_type == "love" for r in records)
+
+
+def test_collect_records_is_curried():
+    """Partial application yields a reusable tab-specific collector."""
+    rows = [{"name": "John", "profile_url": "https://www.facebook.com/john.doe.5"}]
+    like_collector = collect_records(POST_URL, "like")  # (locale, rows) still pending
+    records = like_collector("en", rows)
+    assert records[0].reaction_type == "like"
+
+
 def test_collect_propagates_evaluate_errors():
     """The seam does not swallow errors; the caller (_scrape_active_tab) records them."""
 
@@ -79,6 +101,22 @@ def test_collect_propagates_evaluate_errors():
     scraper = _scraper()
     with pytest.raises(RuntimeError, match="page crashed"):
         scraper._collect_active_tab(_Boom([]), "like")
+
+
+def test_select_targets_prefers_per_type_tabs():
+    tabs = [
+        {"index": 0, "aria": "All", "text": "All 50", "alts": []},
+        {"index": 1, "aria": "Angry", "text": "Angry 12", "alts": []},
+        {"index": 2, "aria": "Haha", "text": "Haha 8", "alts": []},
+    ]
+    targets = select_targets(tabs)
+    assert {(t[1], t[2]) for t in targets} == {("angry", 12), ("haha", 8)}  # 'all' dropped
+
+
+def test_select_targets_falls_back_to_all_then_unknown():
+    only_all = [{"index": 0, "aria": "All reactions", "text": "All 50", "alts": []}]
+    assert select_targets(only_all) == [(0, "all", 50)]
+    assert select_targets([]) == [(-1, "unknown", 0)]  # nothing recognizable
 
 
 def test_warn_on_undercount_flags_large_gaps(caplog):

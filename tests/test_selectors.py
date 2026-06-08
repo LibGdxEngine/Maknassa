@@ -87,8 +87,11 @@ def test_extract_profile_id(url, expected):
 
 
 def test_localized_action_labels_match_both_languages():
-    assert matches_any("More", MORE_BUTTON_LABELS)
-    assert matches_any("المزيد", MORE_BUTTON_LABELS)
-    assert matches_any("Block", BLOCK_MENU_LABELS)
-    assert matches_any("حظر", BLOCK_MENU_LABELS)
-    assert not matches_any("Message", BLOCK_MENU_LABELS)
+    # Curried signature is now (patterns, value); also exercise partial application.
+    is_more = matches_any(MORE_BUTTON_LABELS)
+    is_block = matches_any(BLOCK_MENU_LABELS)
+    assert is_more("More")
+    assert is_more("المزيد")
+    assert is_block("Block")
+    assert is_block("حظر")
+    assert not is_block("Message")

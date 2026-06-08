@@ -3,3 +3,4 @@ playwright-stealth==2.0.2
 pydantic==2.12.5
 tenacity==9.1.4
 lxml==6.0.2
+toolz==1.0.0

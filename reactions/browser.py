@@ -15,6 +15,8 @@ from playwright.sync_api import (
 )
 from playwright_stealth import Stealth
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
+from toolz import curry, pipe
+from toolz.curried import filter as cfilter, map as cmap, unique
 
 from reactions._js import JS_HELPERS
 from reactions.config import ReactionConfig
@@ -287,6 +289,62 @@ def navigate(page: Page, url: str, config: ReactionConfig) -> None:
         )
 
 
+def _norm_plain(value: str) -> str:
+    """Whitespace-collapse + casefold (matches the old ``ReactionScraper._norm``)."""
+    return " ".join((value or "").split()).casefold()
+
+
+def _tab_to_typed(tab: dict) -> tuple[int, str, int] | None:
+    """Pure: map one enumerated tab to ``(index, reaction_type|'all', badge)``, or None."""
+    blob = " ".join([tab.get("aria", ""), tab.get("text", ""), *tab.get("alts", [])])
+    badge = to_int(tab.get("text"))
+    reaction_type = reaction_type_from_label(blob)
+    if reaction_type:
+        return (tab["index"], reaction_type, badge)
+    norm_blob = _norm_plain(blob)
+    if any(_norm_plain(pattern) in norm_blob for pattern in ALL_REACTIONS_LABELS):
+        return (tab["index"], "all", badge)
+    return None
+
+
+def select_targets(tabs: list[dict]) -> list[tuple[int, str, int]]:
+    """Pure: choose which tabs to scrape -- per-type tabs preferred, else the
+    'All' tab, else a single 'unknown' fallback. No I/O; unit-testable."""
+    typed = [t for t in map(_tab_to_typed, tabs) if t is not None]
+    per_type = [t for t in typed if t[1] != "all"]
+    targets = per_type or [t for t in typed if t[1] == "all"]
+    return targets or [(-1, "unknown", 0)]
+
+
+@curry
+def collect_records(
+    post_url: str, reaction_type: str, locale: str | None, rows: list[dict]
+) -> list[ReactorRecord]:
+    """Pure transform: raw DOM rows -> normalized, de-duplicated reactor records.
+
+    No I/O and no shared state, so it is fully unit-testable without a browser.
+    Curried (config-ish args first) so a tab-specific collector can be partially
+    applied. The favorable FP case: the row->record flow reads as a pipeline.
+    """
+    def to_candidate(row: dict) -> RawReactorCandidate:
+        return RawReactorCandidate(
+            name_hint=row.get("name"),
+            profile_url_hint=row.get("profile_url"),
+            reaction_type=reaction_type,
+            source_url=post_url,
+            page_locale=locale,
+        )
+
+    return pipe(
+        rows,
+        cmap(to_candidate),
+        cmap(parse_reactor),
+        cfilter(lambda record: record is not None),
+        unique(key=lambda record: record.profile_key),
+        list,
+    )
+
+
 class ReactionScraper:
     """Open a post, open the reactions dialog, and collect reactors per type."""
 
@@ -307,7 +365,7 @@ class ReactionScraper:
                 navigate(page, self.config.post_url, self.config)
                 self.store.update_session_context(
                     session_id,
-                    canonical_post_url=normalize_url_with_keys(page.url, page.url),
+                    canonical_post_url=normalize_url_with_keys((), page.url, page.url),
                     page_locale=page.locator("html").get_attribute("lang"),
                     logged_out=is_login_wall(page.locator("body").inner_text()),
                 )
@@ -346,29 +404,9 @@ class ReactionScraper:
         page.wait_for_timeout(self.config.settle_timeout_ms)
 
     def _scrape_all_tabs(self, page: Page, session_id: int) -> None:
-        tabs = page.evaluate(ENUM_TABS_SCRIPT)
-        # Map each tab to a canonical reaction type, carrying Facebook's own count
-        # (the tab badge text) so we can report captured-vs-total transparently.
-        typed_tabs: list[tuple[int, str, int]] = []
-        for tab in tabs:
-            blob = " ".join([tab.get("aria", ""), tab.get("text", ""), *tab.get("alts", [])])
-            reaction_type = reaction_type_from_label(blob)
-            is_all = any(
-                self._norm(pattern) in self._norm(blob) for pattern in ALL_REACTIONS_LABELS
-            )
-            badge = to_int(tab.get("text"))
-            if reaction_type:
-                typed_tabs.append((tab["index"], reaction_type, badge))
-            elif is_all:
-                typed_tabs.append((tab["index"], "all", badge))
-
-        # Prefer per-type tabs; only fall back to the "All" tab when there are none.
-        per_type = [(i, t, c) for i, t, c in typed_tabs if t != "all"]
-        targets = per_type or [(i, t, c) for i, t, c in typed_tabs if t == "all"]
-        if not targets:
-            # No recognizable tabs -> scrape whatever the dialog currently shows.
-            targets = [(-1, "unknown", 0)]
-
+        # Pure target selection (which tabs, in what order, with Facebook's own
+        # badge count) is factored into select_targets; here we only drive effects.
+        targets = select_targets(page.evaluate(ENUM_TABS_SCRIPT))
         for index, reaction_type, badge in targets:
             if index >= 0:
                 page.evaluate(CLICK_TAB_SCRIPT, index)
@@ -399,13 +437,9 @@ class ReactionScraper:
                 )
 
     def _collect_active_tab(self, page: Page, reaction_type: str) -> list[ReactorRecord]:
-        """Scrape the active tab into normalized, de-duplicated records.
-
-        Pure data path with no persistence: run the virtualization-safe in-page
-        collector, normalize each row via :func:`parse_reactor`, and de-dup by
-        ``profile_key``. Kept separate from storage so it is unit-testable with a
-        stubbed ``page`` (no live browser, no DB). Exceptions propagate to the
-        caller, which records the failure.
+        """Run the virtualization-safe in-page collector (the effects), then hand
+        the raw rows to the pure :func:`collect_records` pipeline for normalization
+        and de-duplication. Exceptions propagate to the caller, which records them.
         """
         locale = page.locator("html").get_attribute("lang")
         rows = page.evaluate(
@@ -416,24 +450,8 @@ class ReactionScraper:
                 "stableNeeded": self.config.max_idle_rounds,
             },
         )
-        records: list[ReactorRecord] = []
-        seen_keys: set[str] = set()
-        for row in rows:
-            self.stats.discovered_rows += 1
-            record = parse_reactor(
-                RawReactorCandidate(
-                    name_hint=row.get("name"),
-                    profile_url_hint=row.get("profile_url"),
-                    reaction_type=reaction_type,
-                    source_url=self.config.post_url,
-                    page_locale=locale,
-                )
-            )
-            if record is None or record.profile_key in seen_keys:
-                continue
-            seen_keys.add(record.profile_key)
-            records.append(record)
-        return records
+        self.stats.discovered_rows += len(rows)
+        return collect_records(self.config.post_url, reaction_type, locale, rows)
 
     def _scrape_active_tab(self, page: Page, session_id: int, reaction_type: str) -> int:
         """Collect every reactor in the active tab (virtualization-safe) and store."""
@@ -464,10 +482,6 @@ class ReactionScraper:
         else:
             self.stats.duplicate_reactors += 1
         return newly
-
-    @staticmethod
-    def _norm(value: str) -> str:
-        return " ".join((value or "").split()).casefold()
 
 
 # --------------------------------------------------------------------------- #

@@ -14,6 +14,49 @@ def utcnow_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def build_fetch_query(
+    post_url: str,
+    reaction_types: list[str] | None = None,
+    names: list[str] | None = None,
+    include_blocked: bool = False,
+    only_blocked: bool = False,
+) -> tuple[str, list[Any]]:
+    """Pure: assemble the ``(sql, params)`` for a reactor fetch -- no DB access.
+
+    Extracted from ``fetch_reactors`` so the dynamic WHERE-clause logic is unit
+    testable on its own.
+    """
+    clauses = ["post_url = ?"]
+    params: list[Any] = [post_url]
+    if reaction_types:
+        placeholders = ", ".join("?" for _ in reaction_types)
+        clauses.append(f"reaction_type IN ({placeholders})")
+        params.extend(reaction_types)
+    if names:
+        name_clauses = " OR ".join("name LIKE ?" for _ in names)
+        clauses.append(f"({name_clauses})")
+        params.extend(f"%{name}%" for name in names)
+    if only_blocked:
+        clauses.append("blocked = 1")
+    elif not include_blocked:
+        clauses.append("blocked = 0")
+    query = f"SELECT * FROM reactors WHERE {' AND '.join(clauses)} ORDER BY name COLLATE NOCASE"
+    return query, params
+
+
+def row_to_record(row: sqlite3.Row) -> ReactorRecord:
+    """Pure: map a ``reactors`` row to a :class:`ReactorRecord`."""
+    return ReactorRecord(
+        profile_id=row["profile_id"],
+        profile_key=row["profile_key"],
+        name=row["name"],
+        profile_url=row["profile_url"],
+        reaction_type=row["reaction_type"],
+        post_url=row["post_url"],
+        blocked=bool(row["blocked"]),
+    )
+
+
 class SQLiteStore:
     """SQLite persistence for reaction sessions and reactor rows.
 
@@ -228,35 +271,12 @@ class SQLiteStore:
         include_blocked: bool = False,
         only_blocked: bool = False,
     ) -> list[ReactorRecord]:
-        clauses = ["post_url = ?"]
-        params: list[Any] = [post_url]
-        if reaction_types:
-            placeholders = ", ".join("?" for _ in reaction_types)
-            clauses.append(f"reaction_type IN ({placeholders})")
-            params.extend(reaction_types)
-        if names:
-            name_clauses = " OR ".join("name LIKE ?" for _ in names)
-            clauses.append(f"({name_clauses})")
-            params.extend(f"%{name}%" for name in names)
-        if only_blocked:
-            clauses.append("blocked = 1")
-        elif not include_blocked:
-            clauses.append("blocked = 0")
-        query = f"SELECT * FROM reactors WHERE {' AND '.join(clauses)} ORDER BY name COLLATE NOCASE"
+        query, params = build_fetch_query(
+            post_url, reaction_types, names, include_blocked, only_blocked
+        )
         with self.connect() as connection:
             rows = connection.execute(query, params).fetchall()
-        return [
-            ReactorRecord(
-                profile_id=row["profile_id"],
-                profile_key=row["profile_key"],
-                name=row["name"],
-                profile_url=row["profile_url"],
-                reaction_type=row["reaction_type"],
-                post_url=row["post_url"],
-                blocked=bool(row["blocked"]),
-            )
-            for row in rows
-        ]
+        return list(map(row_to_record, rows))
 
     def mark_blocked(self, post_url: str, profile_key: str) -> None:
         with self.connect() as connection:

@@ -140,6 +140,248 @@ _FIND_CONFIRM_BUTTON_SCRIPT = (
 )
 
 
+# --------------------------------------------------------------------------- #
+# Functional core: page-threading actions, each taking the session ``page`` (and
+# ``config``) explicitly. The FacebookBlocker class below is a thin imperative
+# shell that owns the persistent session and delegates here; ``run_session`` is
+# the context-manager-free entry point used by the CLI's by-URL commands.
+# --------------------------------------------------------------------------- #
+
+# Keyword args that specialize ``menu_action`` into block vs unblock.
+_BLOCK = dict(
+    menu_labels=BLOCK_MENU_LABELS,
+    confirm_labels=BLOCK_CONFIRM_LABELS,
+    success_status="blocked",
+    expect_unblock_after=True,
+    stage="block",
+)
+_UNBLOCK = dict(
+    menu_labels=UNBLOCK_LABELS,
+    confirm_labels=UNBLOCK_CONFIRM_LABELS,
+    success_status="unblocked",
+    expect_unblock_after=False,
+    stage="unblock",
+)
+
+
+def session_config(
+    profile_dir: str | Path,
+    headless: bool = False,
+    *,
+    dialog_timeout_ms: int = 12_000,
+    min_delay_s: float = 8.0,
+    max_delay_s: float = 25.0,
+) -> ReactionConfig:
+    """Build the by-URL service config (no post_url / DB needed)."""
+    return ReactionConfig(
+        post_url="",
+        db_path=Path("reactions.db"),
+        profile_dir=Path(profile_dir).expanduser().resolve(),
+        headless=headless,
+        dialog_timeout_ms=dialog_timeout_ms,
+        block_min_delay_s=min_delay_s,
+        block_max_delay_s=max_delay_s,
+    )
+
+
+def human_delay(config: ReactionConfig) -> None:
+    time.sleep(random.uniform(config.block_min_delay_s, config.block_max_delay_s))
+
+
+def load_profile(config: ReactionConfig, page: Page, url: str) -> None:
+    """Navigate, let the profile shell hydrate, and dismiss overlays.
+
+    Waiting for ``networkidle`` makes the "..." action bar reliably present;
+    pressing Escape dismisses the persistent Notifications flyout, which can
+    otherwise overlay the action bar and make the menu look "not found".
+    """
+    navigate(page, url, config)
+    try:
+        page.wait_for_load_state("networkidle", timeout=12_000)
+    except Exception:  # noqa: BLE001 - Facebook streams; fall back to a fixed wait
+        pass
+    page.wait_for_timeout(2_000)
+    try:
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(500)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def open_more_menu(page: Page) -> bool:
+    """Open the profile actions menu (the one containing Block/Report). The action
+    bar hydrates asynchronously, so retry a few times with waits."""
+    args = {
+        "labels": list(MORE_BUTTON_LABELS),
+        "distractors": list(MORE_DISTRACTOR_TERMS),
+        "markers": list(BLOCK_MENU_LABELS) + list(UNBLOCK_LABELS) + list(REPORT_LABELS),
+    }
+    for _ in range(4):
+        if page.evaluate(_OPEN_ACTIONS_MENU_SCRIPT, args):
+            page.wait_for_timeout(400)
+            return True
+        # Dismiss any overlay (Notifications flyout) and let the bar hydrate.
+        try:
+            page.keyboard.press("Escape")
+        except Exception:  # noqa: BLE001
+            pass
+        page.wait_for_timeout(2_000)
+    return False
+
+
+def click_confirm(config: ReactionConfig, page: Page, confirm_labels, attempts: int = 16) -> bool:
+    """Poll for the confirm button inside the real block/unblock dialog and
+    trusted-click it (skipping the Notifications dialog's own buttons)."""
+    args = {
+        "confirm": list(confirm_labels),
+        "avoid": list(BLOCK_CANCEL_LABELS),
+        "skipDialogLabels": list(NOTIFICATION_DIALOG_LABELS),
+    }
+    for _ in range(attempts):
+        handle = page.evaluate_handle(_FIND_CONFIRM_BUTTON_SCRIPT, args)
+        element = handle.as_element()
+        if element is not None:
+            try:
+                element.scroll_into_view_if_needed(timeout=2_000)
+            except Exception:  # noqa: BLE001
+                pass
+            element.click(timeout=config.dialog_timeout_ms)
+            return True
+        page.wait_for_timeout(500)
+    return False
+
+
+def native_click_by_name(config: ReactionConfig, scope, role: str, labels) -> bool:
+    """Trusted Playwright click on the first `role` element under `scope` whose
+    EXACT accessible name matches one of `labels`. Exact names avoid the
+    Unblock/Cancel controls whose names merely contain the block verb."""
+    for label in labels:
+        loc = scope.get_by_role(role, name=label, exact=True)
+        try:
+            if loc.count() > 0:
+                loc.first.click(timeout=config.dialog_timeout_ms)
+                return True
+        except Exception:  # noqa: BLE001 - try the next label
+            continue
+    return False
+
+
+def verify(config: ReactionConfig, page: Page, url: str, expect_unblock_after: bool) -> bool:
+    """Reload the profile and infer block state from the actions menu.
+
+    A *blocked* profile renders a stripped page whose "..." menu either offers
+    Unblock, no longer offers Block, or won't open at all -- so a block is
+    confirmed by any of those. An unblock is confirmed when the menu opens and
+    offers Block again (and not Unblock).
+    """
+    try:
+        load_profile(config, page, url)
+        opened = open_more_menu(page)
+        items = page.evaluate(_DUMP_MENU_ITEMS_SCRIPT) if opened else []
+        is_unblock = matches_any(UNBLOCK_LABELS)
+        is_block = matches_any(BLOCK_MENU_LABELS)
+        has_unblock = any(map(is_unblock, items))
+        has_block = any(is_block(it) and not is_unblock(it) for it in items)
+        if expect_unblock_after:  # after a BLOCK
+            return has_unblock or (opened and not has_block) or (not opened)
+        return opened and has_block and not has_unblock  # after an UNBLOCK
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("verify failed for %s: %s", url, exc)
+        return False
+
+
+def menu_action(
+    config: ReactionConfig,
+    page: Page,
+    profile_url: str,
+    name: str | None,
+    *,
+    menu_labels,
+    confirm_labels,
+    success_status: str,
+    expect_unblock_after: bool,
+    stage: str,
+) -> BlockOutcome:
+    """Shared profile-menu flow for both block and unblock, against an open ``page``.
+
+    Native (trusted-event) clicks: Facebook ignores synthetic JS clicks on the
+    confirm button, so Block/Unblock + Confirm go through Playwright's real input.
+    Targeting by EXACT accessible name avoids the Unblock/Cancel controls whose
+    names merely contain the block verb.
+    """
+    url = normalize_profile_url("https://www.facebook.com/", profile_url) or profile_url
+    key = extract_profile_id(url) or url or profile_url
+
+    def outcome(status: str, detail: str | None = None) -> BlockOutcome:
+        return BlockOutcome(profile_key=key, name=name, profile_url=url, status=status, detail=detail)
+
+    if not url:
+        return outcome("failed", "no profile url")
+    try:
+        load_profile(config, page, url)
+        if not open_more_menu(page):
+            return outcome("failed", "profile actions menu not found")
+        if not native_click_by_name(config, page, "menuitem", menu_labels):
+            return outcome("failed", f"{stage} menu item not found")
+        # The confirmation dialog appears now. The persistent Notifications dialog
+        # ALSO matches [role="dialog"] and carries its own "تأكيد" buttons, so we
+        # locate the confirm button inside the real block dialog and trusted-click.
+        if not click_confirm(config, page, confirm_labels):
+            return outcome("failed", "Confirm button not found")
+        page.wait_for_timeout(1800)
+        if verify(config, page, url, expect_unblock_after):
+            return outcome(success_status)
+        logger.warning("%s of %s: confirm clicked but not verified", stage, url)
+        return outcome("failed", f"confirm clicked but {stage} not verified")
+    except TimeoutError as exc:
+        logger.warning("%s of %s timed out: %s", stage, url, exc)
+        return outcome("failed", f"timeout: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("%s of %s failed: %s", stage, url, exc)
+        return outcome("failed", str(exc))
+
+
+def run_batch(
+    config: ReactionConfig, action_fn, urls: list[str], delay_between: bool = True
+) -> list[BlockOutcome]:
+    """Apply ``action_fn`` to each URL, pausing between successful actions."""
+    outcomes: list[BlockOutcome] = []
+    for index, url in enumerate(urls):
+        outcome = action_fn(url)
+        outcomes.append(outcome)
+        last = index == len(urls) - 1
+        if delay_between and not last and outcome.status in ("blocked", "unblocked"):
+            human_delay(config)
+    return outcomes
+
+
+def run_session(config: ReactionConfig, fn):
+    """Session-runner HOF: open a stealthed persistent page, run ``fn(page)``,
+    and close. The functional alternative to the FacebookBlocker context manager."""
+    with persistent_page(config) as (_context, page):
+        return fn(page)
+
+
+def block_urls(config: ReactionConfig, urls: list[str], *, delay_between: bool = True) -> list[BlockOutcome]:
+    """Block many profile URLs in one session -- no context manager needed."""
+    return run_session(
+        config,
+        lambda page: run_batch(
+            config, lambda u: menu_action(config, page, u, None, **_BLOCK), urls, delay_between
+        ),
+    )
+
+
+def unblock_urls(config: ReactionConfig, urls: list[str], *, delay_between: bool = True) -> list[BlockOutcome]:
+    """Unblock many profile URLs in one session -- no context manager needed."""
+    return run_session(
+        config,
+        lambda page: run_batch(
+            config, lambda u: menu_action(config, page, u, None, **_UNBLOCK), urls, delay_between
+        ),
+    )
+
+
 class FacebookBlocker:
     """Block/unblock Facebook profiles by URL using a logged-in persistent profile.
 
@@ -160,14 +402,12 @@ class FacebookBlocker:
         min_delay_s: float = 8.0,
         max_delay_s: float = 25.0,
     ) -> None:
-        self.config = ReactionConfig(
-            post_url="",
-            db_path=Path("reactions.db"),
-            profile_dir=Path(profile_dir).expanduser().resolve(),
-            headless=headless,
+        self.config = session_config(
+            profile_dir,
+            headless,
             dialog_timeout_ms=dialog_timeout_ms,
-            block_min_delay_s=min_delay_s,
-            block_max_delay_s=max_delay_s,
+            min_delay_s=min_delay_s,
+            max_delay_s=max_delay_s,
         )
         self._cm = None
         self._context = None
@@ -184,48 +424,24 @@ class FacebookBlocker:
             self._cm.__exit__(*exc)
             self._cm = self._context = self.page = None
 
-    # --- public API: the blocking "function" ------------------------------- #
+    # --- public API: thin shell over the functional core above ------------- #
     def block(self, profile_url: str, name: str | None = None) -> BlockOutcome:
         """Block a single profile by URL. Returns a verified BlockOutcome."""
-        return self._menu_action(
-            profile_url,
-            name,
-            menu_labels=BLOCK_MENU_LABELS,
-            confirm_labels=BLOCK_CONFIRM_LABELS,
-            success_status="blocked",
-            expect_unblock_after=True,
-            stage="block",
-        )
+        return menu_action(self.config, self._require_page(), profile_url, name, **_BLOCK)
 
     def unblock(self, profile_url: str, name: str | None = None) -> BlockOutcome:
         """Unblock a single profile by URL. Returns a verified BlockOutcome."""
-        return self._menu_action(
-            profile_url,
-            name,
-            menu_labels=UNBLOCK_LABELS,
-            confirm_labels=UNBLOCK_CONFIRM_LABELS,
-            success_status="unblocked",
-            expect_unblock_after=False,
-            stage="unblock",
-        )
+        return menu_action(self.config, self._require_page(), profile_url, name, **_UNBLOCK)
 
     def block_many(self, profile_urls: list[str], *, delay_between: bool = True) -> list[BlockOutcome]:
-        return self._many(profile_urls, self.block, delay_between)
+        self._require_page()
+        return run_batch(self.config, self.block, profile_urls, delay_between)
 
     def unblock_many(self, profile_urls: list[str], *, delay_between: bool = True) -> list[BlockOutcome]:
-        return self._many(profile_urls, self.unblock, delay_between)
+        self._require_page()
+        return run_batch(self.config, self.unblock, profile_urls, delay_between)
 
     # --- internals --------------------------------------------------------- #
-    def _many(self, urls, action_fn, delay_between) -> list[BlockOutcome]:
-        outcomes: list[BlockOutcome] = []
-        for index, url in enumerate(urls):
-            outcome = action_fn(url)
-            outcomes.append(outcome)
-            last = index == len(urls) - 1
-            if delay_between and not last and outcome.status in ("blocked", "unblocked"):
-                self._human_delay()
-        return outcomes
-
     def _require_page(self) -> Page:
         if self.page is None:
             raise RuntimeError(
@@ -233,159 +449,3 @@ class FacebookBlocker:
                 "`with FacebookBlocker(profile_dir) as fb: fb.block(url)`"
             )
         return self.page
-
-    def _menu_action(
-        self,
-        profile_url: str,
-        name: str | None,
-        *,
-        menu_labels,
-        confirm_labels,
-        success_status: str,
-        expect_unblock_after: bool,
-        stage: str,
-    ) -> BlockOutcome:
-        """Shared profile-menu flow for both block and unblock.
-
-        Native (trusted-event) clicks: Facebook ignores synthetic JS clicks on the
-        confirm button, so Block/Unblock + Confirm go through Playwright's real
-        input. Targeting the menu item / button by EXACT accessible name avoids
-        the Unblock ("إلغاء الحظر") and Cancel ("إلغاء حظر <name>") controls whose
-        names merely contain "حظر".
-        """
-        page = self._require_page()
-        url = normalize_profile_url(profile_url, "https://www.facebook.com/") or profile_url
-        key = extract_profile_id(url) or url or profile_url
-
-        def outcome(status: str, detail: str | None = None) -> BlockOutcome:
-            return BlockOutcome(profile_key=key, name=name, profile_url=url, status=status, detail=detail)
-
-        if not url:
-            return outcome("failed", "no profile url")
-        try:
-            self._load_profile(page, url)
-            if not self._open_more_menu(page):
-                return outcome("failed", "profile actions menu not found")
-
-            if not self._native_click_by_name(page, "menuitem", menu_labels):
-                return outcome("failed", f"{stage} menu item not found")
-
-            # The confirmation dialog appears now. The persistent Notifications
-            # dialog ALSO matches [role="dialog"] and carries its own "تأكيد"
-            # buttons, so we locate the confirm button inside the real block
-            # dialog (skipping Notifications) and trusted-click it.
-            if not self._click_confirm(page, confirm_labels):
-                return outcome("failed", "Confirm button not found")
-            page.wait_for_timeout(1800)
-
-            if self._verify(page, url, expect_unblock_after):
-                return outcome(success_status)
-            logger.warning("%s of %s: confirm clicked but not verified", stage, url)
-            return outcome("failed", f"confirm clicked but {stage} not verified")
-        except TimeoutError as exc:
-            logger.warning("%s of %s timed out: %s", stage, url, exc)
-            return outcome("failed", f"timeout: {exc}")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("%s of %s failed: %s", stage, url, exc)
-            return outcome("failed", str(exc))
-
-    def _load_profile(self, page: Page, url: str) -> None:
-        """Navigate, let the profile shell hydrate, and dismiss overlays.
-
-        Waiting for ``networkidle`` makes the "..." action bar reliably present;
-        pressing Escape dismisses the persistent Notifications flyout, which can
-        otherwise overlay the action bar and make the menu look "not found".
-        """
-        navigate(page, url, self.config)
-        try:
-            page.wait_for_load_state("networkidle", timeout=12_000)
-        except Exception:  # noqa: BLE001 - Facebook streams; fall back to a fixed wait
-            pass
-        page.wait_for_timeout(2_000)
-        try:
-            page.keyboard.press("Escape")
-            page.wait_for_timeout(500)
-        except Exception:  # noqa: BLE001
-            pass
-
-    def _click_confirm(self, page: Page, confirm_labels, attempts: int = 16) -> bool:
-        """Poll for the confirm button inside the real block/unblock dialog and
-        trusted-click it (skipping the Notifications dialog's own buttons)."""
-        args = {
-            "confirm": list(confirm_labels),
-            "avoid": list(BLOCK_CANCEL_LABELS),
-            "skipDialogLabels": list(NOTIFICATION_DIALOG_LABELS),
-        }
-        for _ in range(attempts):
-            handle = page.evaluate_handle(_FIND_CONFIRM_BUTTON_SCRIPT, args)
-            element = handle.as_element()
-            if element is not None:
-                try:
-                    element.scroll_into_view_if_needed(timeout=2_000)
-                except Exception:  # noqa: BLE001
-                    pass
-                element.click(timeout=self.config.dialog_timeout_ms)
-                return True
-            page.wait_for_timeout(500)
-        return False
-
-    def _native_click_by_name(self, scope, role: str, labels) -> bool:
-        """Trusted Playwright click on the first `role` element under `scope` whose
-        EXACT accessible name matches one of `labels` (page-wide or within a
-        dialog Locator). Exact names avoid the Unblock/Cancel controls."""
-        for label in labels:
-            loc = scope.get_by_role(role, name=label, exact=True)
-            try:
-                if loc.count() > 0:
-                    loc.first.click(timeout=self.config.dialog_timeout_ms)
-                    return True
-            except Exception:  # noqa: BLE001 - try the next label
-                continue
-        return False
-
-    def _open_more_menu(self, page: Page) -> bool:
-        """Open the profile actions menu (the one containing Block/Report). The
-        action bar hydrates asynchronously, so retry a few times with waits."""
-        args = {
-            "labels": list(MORE_BUTTON_LABELS),
-            "distractors": list(MORE_DISTRACTOR_TERMS),
-            "markers": list(BLOCK_MENU_LABELS) + list(UNBLOCK_LABELS) + list(REPORT_LABELS),
-        }
-        for attempt in range(4):
-            if page.evaluate(_OPEN_ACTIONS_MENU_SCRIPT, args):
-                page.wait_for_timeout(400)
-                return True
-            # Dismiss any overlay (Notifications flyout) and let the bar hydrate.
-            try:
-                page.keyboard.press("Escape")
-            except Exception:  # noqa: BLE001
-                pass
-            page.wait_for_timeout(2_000)
-        return False
-
-    def _verify(self, page: Page, url: str, expect_unblock_after: bool) -> bool:
-        """Reload the profile and infer block state from the actions menu.
-
-        A *blocked* profile renders a stripped page whose "..." menu either offers
-        Unblock, no longer offers Block, or won't open at all -- so a block is
-        confirmed by any of those. An unblock is confirmed when the menu opens and
-        offers Block again (and not Unblock).
-        """
-        try:
-            self._load_profile(page, url)
-            opened = self._open_more_menu(page)
-            items = page.evaluate(_DUMP_MENU_ITEMS_SCRIPT) if opened else []
-            has_unblock = any(matches_any(it, UNBLOCK_LABELS) for it in items)
-            has_block = any(
-                matches_any(it, BLOCK_MENU_LABELS) and not matches_any(it, UNBLOCK_LABELS)
-                for it in items
-            )
-            if expect_unblock_after:  # after a BLOCK
-                return has_unblock or (opened and not has_block) or (not opened)
-            return opened and has_block and not has_unblock  # after an UNBLOCK
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("verify failed for %s: %s", url, exc)
-            return False
-
-    def _human_delay(self) -> None:
-        time.sleep(random.uniform(self.config.block_min_delay_s, self.config.block_max_delay_s))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
+from typing import Callable
 
 from reactions.blocker import ProfileBlocker
 from reactions.browser import (
@@ -249,7 +250,7 @@ def _print_url_outcomes(outcomes, success: str) -> None:
 
 
 def _cmd_block_url(args: argparse.Namespace) -> int:
-    from reactions.service import FacebookBlocker
+    from reactions.service import block_urls, session_config
 
     urls = args.profile_urls
     if not args.execute:
@@ -257,16 +258,19 @@ def _cmd_block_url(args: argparse.Namespace) -> int:
         for url in urls:
             print(f"  {url}")
         return 0
-    with FacebookBlocker(
-        args.profile_dir, headless=args.headless, min_delay_s=args.min_delay, max_delay_s=args.max_delay
-    ) as fb:
-        outcomes = fb.block_many(urls)
+    config = session_config(
+        args.profile_dir,
+        headless=args.headless,
+        min_delay_s=args.min_delay,
+        max_delay_s=args.max_delay,
+    )
+    outcomes = block_urls(config, urls)
     _print_url_outcomes(outcomes, "blocked")
     return 0
 
 
 def _cmd_unblock_url(args: argparse.Namespace) -> int:
-    from reactions.service import FacebookBlocker
+    from reactions.service import session_config, unblock_urls
 
     urls = args.profile_urls
     if not args.execute:
@@ -274,8 +278,8 @@ def _cmd_unblock_url(args: argparse.Namespace) -> int:
         for url in urls:
             print(f"  {url}")
         return 0
-    with FacebookBlocker(args.profile_dir, headless=args.headless) as fb:
-        outcomes = fb.unblock_many(urls)
+    config = session_config(args.profile_dir, headless=args.headless)
+    outcomes = unblock_urls(config, urls)
     _print_url_outcomes(outcomes, "unblocked")
     return 0
 
@@ -287,22 +291,21 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+# Command dispatch as data: subcommand name -> handler. Replaces the if/elif chain.
+_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
+    "login": _cmd_login,
+    "scrape": _cmd_scrape,
+    "block": _cmd_block,
+    "unblock": _cmd_unblock,
+    "block-url": _cmd_block_url,
+    "unblock-url": _cmd_unblock_url,
+    "inspect": _cmd_inspect,
+}
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     level = logging.INFO if getattr(args, "verbose", False) else logging.WARNING
     logging.basicConfig(level=level, format="%(levelname)s %(name)s: %(message)s")
-    if args.command == "login":
-        return _cmd_login(args)
-    if args.command == "scrape":
-        return _cmd_scrape(args)
-    if args.command == "block":
-        return _cmd_block(args)
-    if args.command == "unblock":
-        return _cmd_unblock(args)
-    if args.command == "block-url":
-        return _cmd_block_url(args)
-    if args.command == "unblock-url":
-        return _cmd_unblock_url(args)
-    if args.command == "inspect":
-        return _cmd_inspect(args)
-    return 1
+    handler = _COMMANDS.get(args.command)
+    return handler(args) if handler else 1

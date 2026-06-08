@@ -66,13 +66,14 @@ def test_parse_reactor_blank_reaction_defaults_to_unknown():
 
 
 def test_normalize_profile_url_keeps_id_drops_tracking():
+    # Curried signature is now (base_url, url).
     assert (
         normalize_profile_url(
-            "https://www.facebook.com/profile.php?id=42&__cft__[0]=abc&__tn__=R", POST_URL
+            POST_URL, "https://www.facebook.com/profile.php?id=42&__cft__[0]=abc&__tn__=R"
         )
         == "https://www.facebook.com/profile.php?id=42"
     )
     assert (
-        normalize_profile_url("https://www.facebook.com/john.doe.5?ref=tag", POST_URL)
+        normalize_profile_url(POST_URL, "https://www.facebook.com/john.doe.5?ref=tag")
         == "https://www.facebook.com/john.doe.5"
     )
