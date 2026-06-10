@@ -30,11 +30,12 @@ binaries = []
 hiddenimports = ["reactions", "reactions.cli", "reactions.desktop"]
 
 # Pull data files, binaries, and submodules for the heavy/lazy packages.
+# NB: pandas/pyarrow/altair are deliberately NOT collected — they back Streamlit's
+# dataframe & chart features, which this app never uses (it renders images,
+# checkboxes, and columns). Excluding them (see `excludes` below) drops ~200 MB of
+# uncompressed bundle. numpy stays: st.image() needs it to marshal avatar images.
 for pkg in (
     "streamlit",
-    "altair",
-    "pyarrow",
-    "pandas",
     "playwright",
     "playwright_stealth",
     "pydantic",
@@ -68,7 +69,8 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["pytest", "mypy", "ruff", "PyInstaller"],
+    # Drop dev tools and Streamlit's unused dataframe/chart stack (see note above).
+    excludes=["pytest", "mypy", "ruff", "PyInstaller", "pandas", "pyarrow", "altair"],
     noarchive=False,
 )
 
@@ -82,7 +84,7 @@ exe = EXE(
     name="maknassa-gui",
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
+    strip=True,  # strip ELF/Mach-O symbols to shrink the bundle (safe; app is unsigned)
     upx=False,
     console=False,  # GUI app: no console window. Flip to True to debug a frozen build.
     icon=EXE_ICON,  # used on Windows; ignored on Linux. macOS icon is set on the BUNDLE.
@@ -92,7 +94,7 @@ coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
-    strip=False,
+    strip=True,
     upx=False,
     name="maknassa",
 )

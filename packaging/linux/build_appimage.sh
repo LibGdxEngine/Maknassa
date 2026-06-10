@@ -66,6 +66,7 @@ fi
 
 echo ">> Building $OUT"
 rm -f "$OUT"
+# --comp zstd: smaller image than the default gzip, with fast startup decompression.
 # EXTRACT_AND_RUN lets appimagetool (itself an AppImage) run on CI runners without FUSE.
-ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" "$APPDIR" "$OUT"
+ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --comp zstd "$APPDIR" "$OUT"
 echo ">> Done: $OUT"

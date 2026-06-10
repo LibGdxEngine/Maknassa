@@ -192,8 +192,10 @@ packaging step then wraps that folder into the distributable installer
 > [`packaging/maknassa.spec`](packaging/maknassa.spec). This is the one expected
 > manual step of a Streamlit freeze.
 
-The bundle is large (~150 MB Chromium + Streamlit/pandas/pyarrow). `build/`, `dist/`,
-and `packaging/ms-playwright/` are git-ignored.
+The installer is large (~310 MB AppImage) — mostly the bundled Chromium and the
+Playwright driver. Streamlit's unused dataframe/chart stack (pandas/pyarrow/altair) is
+excluded from the freeze to keep it down. `build/`, `dist/`, and
+`packaging/ms-playwright/` are git-ignored.
 
 ---
 
