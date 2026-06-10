@@ -10,7 +10,10 @@ __pycache__/
 # Packaging / build output
 build/
 dist/
-packaging/ms-playwright/   # bundled Chromium fetched at build time (large)
+# bundled Chromium fetched at build time (large); inline comments aren't valid in .gitignore
+packaging/ms-playwright/
+# generated AppImage staging
+packaging/**/*.AppDir/
 
 # Playwright persistent profile — contains your Facebook session cookies. NEVER commit.
 .profiles/

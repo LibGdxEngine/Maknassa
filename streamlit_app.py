@@ -4,14 +4,9 @@ Flow: paste a Facebook post URL -> "Fetch reactors" opens the post's reactions
 dialog and collects everyone who reacted (name + thumbnail + reaction type) ->
 tick the people you want -> "Block selected" blocks exactly those profiles.
 
-The browser work reuses the project's logged-in persistent profile, so log in once
-first::
-
-    python main.py login
-
-then run the UI with::
-
-    streamlit run streamlit_app.py
+The browser work reuses the project's logged-in persistent profile. Sign in once
+with the sidebar's **"Connect to Facebook"** button (it opens a real browser window
+and waits for the login), then paste a post URL and fetch.
 
 Playwright's sync API is driven on a fresh worker thread (``ui_fetch.in_thread``)
 so it never collides with Streamlit's own event loop.
@@ -23,7 +18,8 @@ from pathlib import Path
 
 import streamlit as st
 
-from reactions import licensing, paths
+from reactions import paths
+from reactions.browser import login_flow
 from reactions.config import ReactionConfig
 from reactions.service import block_urls, session_config
 from reactions.ui_fetch import UIReactor, fetch_reactors, in_thread
@@ -43,16 +39,76 @@ REACTION_EMOJI: dict[str, str] = {
 
 st.set_page_config(page_title="Reactor Blocker", page_icon="🚫", layout="centered")
 
+# How long the in-app "Connect to Facebook" button waits for a sign-in. The Streamlit
+# session is frozen while this runs, so it's shorter than login_flow's CLI default (300s).
+LOGIN_TIMEOUT_S = 120
+
+
+def _do_login(profile_dir: str) -> None:
+    """Open a headed browser for the one-time Facebook sign-in (reuses ``login_flow``).
+
+    Runs on a worker thread (``in_thread``) so Playwright's sync API never collides
+    with Streamlit's event loop. On success the captured account id is stashed in
+    session state so the sidebar can show a "connected" badge.
+    """
+    config = ReactionConfig(
+        post_url="",
+        db_path=paths.default_db_path(),
+        profile_dir=Path(profile_dir).expanduser().resolve(),
+        headless=False,  # login must be headed so the user can actually sign in
+    )
+    try:
+        with st.spinner("A browser window is opening — log in to Facebook there, then come back…"):
+            # Bounded wait: the session is frozen until this returns, so cap it rather
+            # than block on login_flow's CLI-oriented 5-minute default.
+            c_user = in_thread(login_flow, config, timeout_s=LOGIN_TIMEOUT_S)
+    except Exception as exc:  # noqa: BLE001 - surface any browser/login error in the UI
+        st.session_state["fb_user"] = None
+        st.session_state["login_error"] = str(exc)
+        return
+    st.session_state["fb_user"] = c_user
+    if not c_user:
+        st.session_state["login_timed_out"] = True
+
+
+def _render_login() -> None:
+    """Sidebar 'Connect to Facebook' control + connection status.
+
+    The button only *requests* a login (sets a flag); ``main()`` performs the actual,
+    session-freezing browser wait inline rather than inside a Streamlit callback —
+    mirroring how the Fetch button drives ``_do_fetch``.
+    """
+    st.header("Facebook account")
+    if st.session_state.get("fb_user"):
+        st.success(f"Connected (account id {st.session_state['fb_user']}).")
+    else:
+        st.caption(
+            "Sign in once. A real browser window opens — log in to Facebook there, then "
+            "return here. Your session stays on this device and is never uploaded."
+        )
+    if st.button("🔑 Connect to Facebook", use_container_width=True):
+        st.session_state["request_login"] = True
+    if st.session_state.pop("login_timed_out", False):
+        st.warning(
+            "Didn't detect a login within 2 minutes. Click **Connect to Facebook** again "
+            "and finish signing in."
+        )
+    login_error = st.session_state.pop("login_error", None)
+    if login_error:
+        st.error(f"Login failed: {login_error}")
+
 
 def _sidebar() -> dict:
     """Render the session controls and return them as a settings dict."""
     with st.sidebar:
-        st.header("Session")
-        st.caption(
-            "Uses your saved Facebook login. If fetching hits a login wall, run "
-            "`python main.py login` once in a terminal, finish signing in, then retry."
+        profile_dir = st.text_input(
+            "Profile dir",
+            value=str(paths.default_profile_dir()),
+            help="Where your logged-in browser session is stored on this device.",
         )
-        profile_dir = st.text_input("Profile dir", value=str(paths.default_profile_dir()))
+        _render_login()
+        st.divider()
+        st.header("Session")
         headless = st.checkbox(
             "Headless browser", value=False, help="Uncheck to watch the browser / solve checkpoints."
         )
@@ -195,45 +251,20 @@ def _render_outcomes() -> None:
         st.write(f"{icon} `{outcome.status}` {outcome.name or outcome.profile_url}{detail}")
 
 
-def _render_activation_gate() -> None:
-    """Block the app behind licence activation. Returns only once activated."""
-    if licensing.is_activated():
-        return
-    st.title("🔑 Activate Maknassa")
-    st.write(
-        "Maknassa is a licensed app. Paste the licence key from your purchase "
-        "confirmation to activate it on this machine."
-    )
-    key = st.text_input("Licence key", type="password", placeholder="XXXXXXXX-XXXX-…")
-    agreed = st.checkbox(
-        "I accept the End-User Licence Agreement, and I understand I run this on my "
-        "own Facebook account and at my own risk."
-    )
-    if st.button("Activate", type="primary", disabled=not agreed):
-        if not key.strip():
-            st.warning("Paste your licence key first.")
-        else:
-            with st.spinner("Activating…"):
-                result = licensing.activate(key)
-            if result.activated:
-                st.success(f"{result.detail} Loading…")
-                st.rerun()
-            else:
-                st.error(result.detail)
-    with st.expander("Where do I find my key, and how do I move it to another machine?"):
-        st.write(
-            "Your key is in the purchase confirmation email/receipt. One key activates "
-            "one machine; to move it, run `maknassa license deactivate` here first, then "
-            "activate on the other machine."
-        )
-    st.stop()
-
-
 def main() -> None:
-    _render_activation_gate()
     st.title("🚫 Reactor Blocker")
     st.write("Fetch everyone who reacted to a post, then block the ones you pick.")
     settings = _sidebar()
+
+    # Long-running browser work is triggered by a button that only sets a flag; we run
+    # it here (not in a Streamlit callback) so the spinner and any error render in the
+    # page body, matching how the Fetch button drives _do_fetch. Both run before the
+    # confirm_block checkbox is built, so _do_block's consent reset stays safe.
+    if st.session_state.pop("request_login", False):
+        _do_login(settings["profile_dir"])
+        st.rerun()  # refresh the sidebar so the "Connected" badge appears immediately
+    if st.session_state.pop("request_block", False):
+        _do_block(settings)
 
     post_url = st.text_input("Facebook post URL", placeholder="https://www.facebook.com/.../posts/...")
     if st.button("Fetch reactors", type="primary"):
@@ -262,13 +293,15 @@ def main() -> None:
             f"I understand this will block {selected_count} selected profile(s).",
             key="confirm_block",
         )
-        st.button(
+        if st.button(
             f"Block selected ({selected_count})",
             type="primary",
             disabled=not confirmed or selected_count == 0,
-            on_click=_do_block,
-            args=(settings,),
-        )
+        ):
+            # Defer to the top-of-main handler (a rerun) so the block runs before the
+            # confirm_block checkbox is rebuilt, letting _do_block reset consent safely.
+            st.session_state["request_block"] = True
+            st.rerun()
     elif "reactors" in st.session_state:
         st.info("No reactors found for that post.")
 

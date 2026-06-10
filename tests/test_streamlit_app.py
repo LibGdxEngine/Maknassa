@@ -42,14 +42,51 @@ def test_app_renders_without_error():
     assert any("Reactor Blocker" in (m.value or "") for m in at.title)
 
 
-def test_activation_gate_blocks_when_unlicensed(monkeypatch):
-    """With no dev bypass and no licence token, only the activation screen renders."""
-    monkeypatch.delenv("MAKNASSA_DEV", raising=False)
+def test_app_opens_straight_to_the_tool():
+    """Open-source build: no licence gate, so the tool renders for everyone."""
     at = _app().run()
     assert not at.exception
-    assert any("Activate Maknassa" in (m.value or "") for m in at.title)
-    # The real app must not render past the gate.
-    assert not any("Reactor Blocker" in (m.value or "") for m in at.title)
+    assert any("Reactor Blocker" in (m.value or "") for m in at.title)
+    assert not any("Activate" in (m.value or "") for m in at.title)
+
+
+def _click_connect(at: AppTest) -> AppTest:
+    return next(b for b in at.button if "Connect to Facebook" in b.label).click().run()
+
+
+def test_login_button_connects_and_shows_badge(monkeypatch):
+    """A successful login stashes the account id and shows the 'Connected' badge."""
+    import reactions.ui_fetch as uf
+
+    monkeypatch.setattr(uf, "in_thread", lambda fn, *a, **k: "100012345")  # canned c_user
+    at = _click_connect(_app().run())
+    assert not at.exception
+    assert at.session_state["fb_user"] == "100012345"
+    assert any("Connected" in (m.value or "") for m in at.success)
+
+
+def test_login_timeout_shows_warning(monkeypatch):
+    """No login detected (login_flow returns None) -> a retry warning, no crash."""
+    import reactions.ui_fetch as uf
+
+    monkeypatch.setattr(uf, "in_thread", lambda fn, *a, **k: None)
+    at = _click_connect(_app().run())
+    assert not at.exception
+    assert at.session_state["fb_user"] is None
+    assert any("Didn't detect a login" in (w.value or "") for w in at.warning)
+
+
+def test_login_error_is_surfaced_not_raised(monkeypatch):
+    """A browser/login error is shown in the UI, not raised as an app exception."""
+    import reactions.ui_fetch as uf
+
+    def boom(fn, *a, **k):
+        raise RuntimeError("browser was closed")
+
+    monkeypatch.setattr(uf, "in_thread", boom)
+    at = _click_connect(_app().run())
+    assert not at.exception
+    assert any("Login failed" in (e.value or "") for e in at.error)
 
 
 def test_empty_url_fetch_warns_and_does_not_crash():

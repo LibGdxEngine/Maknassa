@@ -1,4 +1,4 @@
-"""Per-user, writable filesystem locations for app data, profiles, and licence.
+"""Per-user, writable filesystem locations for app data and browser profiles.
 
 Run from a source checkout, the app historically wrote ``reactions.db`` and
 ``.profiles/facebook`` relative to the current directory. Once frozen into a
@@ -12,10 +12,9 @@ Support/Maknassa`` / Windows ``%LOCALAPPDATA%\\Maknassa``)::
 
     <app_data_dir>/data/reactions.db        # SQLite store
     <app_data_dir>/profiles/<account>/      # Playwright persistent profile(s)
-    <config_dir>/license.json               # activation token
 
 Set ``MAKNASSA_DATA_DIR`` to relocate everything under one folder (portable
-install / tests); when set, config lives at ``<MAKNASSA_DATA_DIR>/config``.
+install / tests).
 """
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ import platformdirs
 APP_NAME = "Maknassa"
 APP_AUTHOR = "Maknassa"
 
-# Override env var: when set, app data and config both live under this root.
+# Override env var: when set, all app data lives under this root.
 DATA_DIR_ENV = "MAKNASSA_DATA_DIR"
 
 
@@ -44,16 +43,6 @@ def app_data_dir() -> Path:
     return base
 
 
-def config_dir() -> Path:
-    """Writable root for small config/state like the licence token."""
-    override = _override_root()
-    base = (override / "config") if override else Path(
-        platformdirs.user_config_dir(APP_NAME, APP_AUTHOR)
-    )
-    base.mkdir(parents=True, exist_ok=True)
-    return base
-
-
 def default_db_path() -> Path:
     """Default SQLite path. ``SQLiteStore`` creates the ``data/`` parent itself."""
     return app_data_dir() / "data" / "reactions.db"
@@ -62,8 +51,3 @@ def default_db_path() -> Path:
 def default_profile_dir(account: str = "facebook") -> Path:
     """Default persistent-profile dir for an account (Playwright creates it)."""
     return app_data_dir() / "profiles" / account
-
-
-def license_path() -> Path:
-    """Path to the persisted licence-activation token."""
-    return config_dir() / "license.json"

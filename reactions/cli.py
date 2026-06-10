@@ -126,11 +126,6 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--profile-url", default=None, help="Also dump a profile's action buttons/menu")
     inspect.add_argument("--out", default=None, help="Write the JSON report to this path")
 
-    lic = sub.add_parser("license", help="Activate, check, or release your Maknassa licence")
-    lic.add_argument("action", choices=["activate", "status", "deactivate"])
-    lic.add_argument("key", nargs="?", default=None, help="Licence key (required for activate)")
-    _add_verbose(lic)
-
     return parser
 
 
@@ -318,27 +313,6 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_license(args: argparse.Namespace) -> int:
-    from reactions import licensing
-
-    if args.action == "activate":
-        result = licensing.activate(args.key or "")
-        print(result.detail)
-        return 0 if result.activated else 1
-    if args.action == "deactivate":
-        ok = licensing.deactivate()
-        print("Licence released for this machine." if ok else "No active licence to release.")
-        return 0
-    status = licensing.status()  # "status"
-    line = status.detail
-    if status.key_masked:
-        line += f"  (key {status.key_masked})"
-    if status.last_validated_at:
-        line += f"  last validated {status.last_validated_at}"
-    print(line)
-    return 0 if status.activated else 1
-
-
 # Command dispatch as data: subcommand name -> handler. Replaces the if/elif chain.
 _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "login": _cmd_login,
@@ -348,25 +322,7 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "block-url": _cmd_block_url,
     "unblock-url": _cmd_unblock_url,
     "inspect": _cmd_inspect,
-    "license": _cmd_license,
 }
-
-# Commands that drive the browser are gated behind an active licence; `license`
-# (managing the key itself) is always allowed.
-_UNGATED_COMMANDS = frozenset({"license"})
-
-
-def _require_license(command: str) -> bool:
-    from reactions import licensing
-
-    if command in _UNGATED_COMMANDS or licensing.is_activated():
-        return True
-    print(
-        "This copy of Maknassa isn't activated. Run "
-        "`maknassa license activate <key>` to activate it "
-        f"(or set {licensing.DEV_BYPASS_ENV}=1 for development)."
-    )
-    return False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -376,6 +332,4 @@ def main(argv: list[str] | None = None) -> int:
     handler = _COMMANDS.get(args.command)
     if handler is None:
         return 1
-    if not _require_license(args.command):
-        return 3
     return handler(args)

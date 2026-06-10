@@ -4,12 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "maknassa"
-version = "0.1.0"
-description = "Self-hosted desktop tool to review and block the people who reacted to your Facebook post."
+version = "1.0.0"
+description = "Free, open-source desktop tool to review and block the people who reacted to your Facebook post."
 requires-python = ">=3.10"
 readme = "README.md"
-license = { file = "EULA.md" }
-authors = [{ name = "Maknassa" }]
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Maknassa contributors" }]
 dependencies = [
     "playwright==1.58.0",
     "playwright-stealth==2.0.2",
