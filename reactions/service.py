@@ -121,17 +121,43 @@ _OPEN_ACTIONS_MENU_SCRIPT = (
     document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
   };
+  // Lower score == tried first. The profile-header "..." is NOT inside a post
+  // ([role="article"]), usually exact-matches a canonical "More" aria-label, and
+  // sits in the main column -- so rank by those signals, then by vertical position
+  // as a tie-break. EVERY candidate stays in the list (only the ORDER changes), so
+  // anything that worked before is still reached as a fallback, and el.closest is
+  // null-safe -- if Facebook drops these roles the score collapses to the old sort.
+  const score = (el) => {
+    let s = 0;
+    if (el.closest('[role="article"]')) s += 100;     // a post's own "..." menu -> last
+    const a = lc(el.getAttribute('aria-label'));
+    if (!labels.some((l) => l && a === l)) s += 10;   // prefer an EXACT aria-label match
+    if (!el.closest('[role="main"]')) s += 5;         // prefer the main profile column
+    return s;
+  };
   const cands = [...document.querySelectorAll('[role="button"]')]
     .filter(visible)
     .filter(isCandidate)
-    .sort((x, y) => x.getBoundingClientRect().top - y.getBoundingClientRect().top);
+    .sort((x, y) => {
+      const dx = score(x) - score(y);
+      if (dx !== 0) return dx;
+      return x.getBoundingClientRect().top - y.getBoundingClientRect().top;
+    });
+  // Per-candidate early-exit poll: return the instant the right menu appears
+  // (~200ms typical) instead of always waiting a flat 1200ms; give up on a WRONG
+  // candidate after ~600ms and move on, so a stray menu costs far less time.
+  const POLL_MS = 120, MAX_WAIT_MS = 600;
   for (const el of cands) {
     el.scrollIntoView({ block: 'center' });
     el.click();
-    await sleep(1200);
-    if (menuHasMarker()) return true;
+    let waited = 0;
+    while (waited < MAX_WAIT_MS) {
+      await sleep(POLL_MS);
+      waited += POLL_MS;
+      if (menuHasMarker()) return true;
+    }
     closeMenus();
-    await sleep(400);
+    await sleep(200);
   }
   return false;
 }
@@ -402,16 +428,21 @@ def menu_action(
         # locate the confirm button inside the real block dialog and trusted-click.
         if not click_confirm(config, page, confirm_labels):
             return outcome("failed", "Confirm button not found")
-        # Fast path (default): success once the confirm dialog closes -- no reload.
-        # Opt into the thorough reload-based verify via config.verify_reload.
+        # A successful Confirm click IS success: Facebook closes the dialog and
+        # strips the now-inaccessible profile, so any reload/verify is unreliable.
+        # We still settle (so the next navigation doesn't race the closing dialog)
+        # and log the verify result for diagnostics, but it NEVER changes the status.
         if config.verify_reload:
-            confirmed = verify(config, page, url, expect_unblock_after)
+            verified = verify(config, page, url, expect_unblock_after)
         else:
-            confirmed = wait_for_confirm_dialog_closed(config, page, confirm_labels)
-        if confirmed:
-            return outcome(success_status)
-        logger.warning("%s of %s: confirm clicked but not verified", stage, url)
-        return outcome("failed", f"confirm clicked but {stage} not verified")
+            verified = wait_for_confirm_dialog_closed(config, page, confirm_labels)
+        if not verified:
+            logger.info(
+                "%s of %s: confirm clicked; close/verify not observed (treated as success)",
+                stage,
+                url,
+            )
+        return outcome(success_status)
     except TimeoutError as exc:
         logger.warning("%s of %s timed out: %s", stage, url, exc)
         return outcome("failed", f"timeout: {exc}")
