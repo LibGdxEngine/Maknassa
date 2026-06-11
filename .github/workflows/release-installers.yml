@@ -52,7 +52,11 @@ jobs:
         run: bash packaging/build.sh
       - name: Package AppImage (Linux)
         if: runner.os == 'Linux'
-        run: bash packaging/linux/build_appimage.sh
+        # desktop-file-utils provides desktop-file-validate, which appimagetool
+        # requires but current ubuntu-latest runner images no longer preinstall.
+        run: |
+          sudo apt-get update -q && sudo apt-get install -yq desktop-file-utils
+          bash packaging/linux/build_appimage.sh
 
       # ---- macOS ----
       - name: Build bundle (macOS)
