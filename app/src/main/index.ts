@@ -63,7 +63,11 @@ function createWindow(hs: BackendHandshake): BrowserWindow {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      // Keep Chromium's renderer sandbox on (the default). The preload uses only
+      // contextBridge + ipcRenderer, both sandbox-safe, and the renderer is pure
+      // web, so nothing needs it off. On the Linux AppImage the --no-sandbox flag
+      // (from AppRun) disables it anyway; on macOS/Windows this keeps it enforced.
+      sandbox: true,
       preload: path.join(__dirname, '../preload/index.js')
     }
   })

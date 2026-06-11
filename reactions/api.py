@@ -60,6 +60,7 @@ from pydantic import BaseModel, Field
 
 from reactions import paths
 from reactions.browser import login_flow
+from reactions.config import ReactionConfig
 from reactions.service import FacebookBlocker, human_delay, session_config
 from reactions.ui_fetch import fetch_reactors, in_thread
 
@@ -87,6 +88,12 @@ _DEFAULT_SETTINGS: dict[str, Any] = {
 # --------------------------------------------------------------------------- #
 # Persisted UI state (settings + connected account) at app_data_dir/ui_state.json
 # --------------------------------------------------------------------------- #
+# Settings PUT (uvicorn worker thread) and the post-login account_id write (login
+# job thread) both read-modify-write this one file; the lock serializes those so a
+# concurrent PUT can't clobber a just-written account_id (or vice versa).
+_state_lock = threading.Lock()
+
+
 def _state_path() -> Path:
     return paths.app_data_dir() / _STATE_FILENAME
 
@@ -111,10 +118,30 @@ def _load_state() -> dict[str, Any]:
 
 
 def _save_state(state: dict[str, Any]) -> None:
-    """Persist ``state`` to ui_state.json (the data dir is created on demand)."""
+    """Persist ``state`` to ui_state.json (the data dir is created on demand).
+
+    Written via a temp file + atomic replace so a concurrent ``_load_state`` reader
+    never sees a half-written file (it would otherwise degrade to defaults).
+    """
     path = _state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _update_state(mutate: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+    """Atomically read-modify-write ui_state.json under ``_state_lock``.
+
+    ``mutate`` edits the loaded dict in place; the re-load happens inside the lock,
+    so a mutator that only touches its own keys (settings vs account_id) preserves
+    the others even when another thread is writing concurrently.
+    """
+    with _state_lock:
+        state = _load_state()
+        mutate(state)
+        _save_state(state)
+        return state
 
 
 def _current_settings() -> dict[str, Any]:
@@ -133,13 +160,18 @@ def _current_settings() -> dict[str, Any]:
 
 
 def _coerce_settings(settings: dict[str, Any]) -> dict[str, Any]:
-    """Normalize types so the JSON contract is stable regardless of input source."""
+    """Normalize types and clamp ranges so the JSON contract is stable and safe.
+
+    Negative values are clamped to 0: a negative ``stop_after`` must mean "no cap"
+    (not "stop immediately"), and negative delays are nonsensical. Clamping here, at
+    the one boundary all settings flow through, keeps every downstream consumer simple.
+    """
     return {
         "profile_dir": str(settings["profile_dir"]),
         "headless": bool(settings["headless"]),
-        "min_delay": float(settings["min_delay"]),
-        "max_delay": float(settings["max_delay"]),
-        "stop_after": int(settings["stop_after"]),
+        "min_delay": max(0.0, float(settings["min_delay"])),
+        "max_delay": max(0.0, float(settings["max_delay"])),
+        "stop_after": max(0, int(settings["stop_after"])),
     }
 
 
@@ -257,7 +289,9 @@ class JobManager:
 # Browser work bodies (run on the job thread). Each takes the live Job so it can
 # stream progress and honor cancellation.
 # --------------------------------------------------------------------------- #
-def _settings_config(settings: dict[str, Any], post_url: str = "", *, force_headed: bool = False):
+def _settings_config(
+    settings: dict[str, Any], post_url: str = "", *, force_headed: bool = False
+) -> ReactionConfig:
     """Build a ReactionConfig from saved settings via service.session_config.
 
     ``stop_after`` maps onto ``session_config``'s ``daily_cap`` (its per-run cap;
@@ -290,9 +324,7 @@ def _run_login(job: Job, timeout_s: int) -> dict[str, Any]:
     account_id = login_flow(config, timeout_s=timeout_s)
     if not account_id:
         raise RuntimeError("login-timeout")
-    state = _load_state()
-    state["account_id"] = account_id
-    _save_state(state)
+    _update_state(lambda state: state.update({"account_id": account_id}))
     return {"account_id": account_id}
 
 
@@ -321,7 +353,7 @@ def _run_block(job: Job, profile_urls: list[str], *, unblock: bool) -> list[Any]
     """
     settings = _current_settings()
     config = _settings_config(settings)
-    cap = config.daily_cap if config.daily_cap > 0 else 0
+    cap = config.daily_cap  # already clamped >= 0 by _coerce_settings (0 = unlimited)
 
     total = len(profile_urls)
     outcomes: list[Any] = []
@@ -439,16 +471,16 @@ def create_app(token: str) -> FastAPI:
 
     @app.put("/api/settings", dependencies=auth)
     def put_settings(body: SettingsBody) -> dict[str, Any]:
-        state = _load_state()
         updates = body.model_dump(exclude_none=True)
-        merged = _current_settings()
-        merged.update(updates)
-        merged = _coerce_settings(merged)
-        # Persist only the settings keys (never clobber account_id, which lives in
-        # the same file but is owned by the login flow).
-        for key in ("profile_dir", "headless", "min_delay", "max_delay", "stop_after"):
-            state[key] = merged[key]
-        _save_state(state)
+        merged = _coerce_settings({**_current_settings(), **updates})
+
+        # Write only the settings keys, under the state lock, so a concurrent login
+        # writing account_id (which this mutator never touches) is preserved.
+        def _apply(state: dict[str, Any]) -> None:
+            for key in ("profile_dir", "headless", "min_delay", "max_delay", "stop_after"):
+                state[key] = merged[key]
+
+        _update_state(_apply)
         return merged
 
     @app.post("/api/login", dependencies=auth)

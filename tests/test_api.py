@@ -169,6 +169,35 @@ def test_login_success_persists_account_and_connects(client, monkeypatch):
     assert session["account_id"] == "100012345"
 
 
+def test_settings_put_preserves_account_id(client, monkeypatch):
+    """A settings PUT must not clobber the account_id the login flow stored.
+
+    Both write the same ui_state.json from different threads; this locks the
+    read-modify-write contract that keeps the two fields independent.
+    """
+    monkeypatch.setattr(api, "login_flow", lambda config, timeout_s=300: "100012345")
+    resp = client.post("/api/login", headers=AUTH, json={"timeout_s": 5})
+    _await_done(client, resp.json()["job_id"])
+    assert client.get("/api/session", headers=AUTH).json()["connected"] is True
+
+    saved = client.put("/api/settings", headers=AUTH, json={"headless": True, "stop_after": 9})
+    assert saved.status_code == 200
+    assert saved.json()["headless"] is True
+
+    session = client.get("/api/session", headers=AUTH).json()
+    assert session["connected"] is True
+    assert session["account_id"] == "100012345"
+
+
+def test_settings_clamps_negative_values(client):
+    """Negative stop_after/delays clamp to 0 (no cap / no negative pause)."""
+    saved = client.put(
+        "/api/settings", headers=AUTH, json={"stop_after": -5, "min_delay": -1.0}
+    ).json()
+    assert saved["stop_after"] == 0
+    assert saved["min_delay"] == 0.0
+
+
 def test_login_timeout_is_error_state(client, monkeypatch):
     monkeypatch.setattr(api, "login_flow", lambda config, timeout_s=300: None)
 
