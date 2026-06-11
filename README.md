@@ -207,7 +207,9 @@ excluded from the freeze to keep it down. `build/`, `dist/`, and
 Installers are built on GitHub's cloud runners and attached to a GitHub Release by the
 [`release-installers`](.github/workflows/release-installers.yml) workflow — native
 installers can't be cross-compiled, so each OS builds its own (`windows-latest`,
-`macos-13`, `ubuntu-latest`). Two ways to run it:
+`macos-latest`, `ubuntu-latest`). The macOS build runs on Apple Silicon (arm64); the
+resulting `.dmg` is native on Apple-Silicon Macs — Intel Macs would need a separate
+`macos-13` build (GitHub's Intel runners are currently backlogged). Two ways to run it:
 
 ```bash
 # Cut a brand-new release: push a tag and the workflow builds + attaches all three.

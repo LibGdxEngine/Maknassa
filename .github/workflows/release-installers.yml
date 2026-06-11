@@ -3,8 +3,12 @@ name: release-installers
 # Builds the one-click installers on GitHub's cloud runners and attaches them to a
 # GitHub Release. Native installers can't be cross-compiled, so each OS builds its own:
 #   * Windows  -> Maknassa-Setup.exe   (PyInstaller + Inno Setup)
-#   * macOS    -> Maknassa.dmg         (PyInstaller .app + hdiutil), built on Intel so
-#                                       it runs on both Intel and Apple-Silicon (Rosetta)
+#   * macOS    -> Maknassa.dmg         (PyInstaller .app + hdiutil) on Apple Silicon.
+#                                       GitHub's Intel macOS runners (macos-13) are
+#                                       backlogged for hours on public repos, so we
+#                                       target macos-latest (arm64). This .dmg runs
+#                                       natively on Apple-Silicon Macs; Intel Macs need
+#                                       a separate macos-13 build (add when runners free).
 #   * Linux    -> Maknassa.AppImage    (PyInstaller + appimagetool)
 #
 # Trigger it two ways:
@@ -34,7 +38,7 @@ jobs:
         include:
           - os: windows-latest
             asset: dist/Maknassa-Setup.exe
-          - os: macos-13          # Intel runner -> universal-ish reach (Intel + Rosetta)
+          - os: macos-latest      # Apple Silicon (arm64); Intel runners are backlogged
             asset: dist/Maknassa.dmg
           - os: ubuntu-latest
             asset: dist/Maknassa.AppImage
