@@ -40,8 +40,9 @@ cat > "$APPDIR/AppRun" <<'EOF'
 HERE="$(dirname "$(readlink -f "$0")")"
 # Electron's setuid sandbox helper can't work from an AppImage (squashfs is
 # nosuid) and Ubuntu 24.04+ also blocks the unprivileged-userns fallback, so the
-# bundled chrome-sandbox aborts. Pass --no-sandbox unconditionally: the renderer
-# only ever loads our local bundle and the localhost API, never remote content.
+# bundled chrome-sandbox aborts. Pass --no-sandbox unconditionally: the renderer's
+# document is always our local bundle, its API target is the loopback backend, and
+# its only remote content is non-executable avatar images (locked down by the CSP).
 exec "$HERE/usr/bin/maknassa" --no-sandbox "$@"
 EOF
 chmod +x "$APPDIR/AppRun"
