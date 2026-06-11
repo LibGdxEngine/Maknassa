@@ -4,7 +4,7 @@ from functools import partial
 from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
 
 from reactions.models import RawReactorCandidate, ReactorRecord
-from reactions.selectors import extract_profile_id, is_profile_href
+from reactions.selectors import GROUP_MEMBER_PATH, extract_profile_id, is_profile_href
 
 
 def normalize_whitespace(value: str | None) -> str | None:
@@ -52,6 +52,20 @@ def _validate_profile_url(url: str | None) -> str | None:
 
 def parse_reactor(candidate: RawReactorCandidate) -> ReactorRecord | None:
     """Turn a raw reactor row into a normalized, de-dup-keyed record."""
+    # Group posts link reactors as /groups/<gid>/user/<uid>/. Map that to the
+    # canonical, blockable profile (profile.php?id=<uid>) keyed by the real user
+    # id -- otherwise is_profile_href rejects the /groups/ path and drops everyone.
+    group_member = GROUP_MEMBER_PATH.search(candidate.profile_url_hint or "")
+    if group_member:
+        uid = group_member.group(1)
+        return ReactorRecord(
+            profile_id=uid,
+            profile_key=uid,
+            name=normalize_whitespace(candidate.name_hint),
+            profile_url=f"https://www.facebook.com/profile.php?id={uid}",
+            reaction_type=candidate.reaction_type or "unknown",
+            post_url=candidate.source_url,
+        )
     # normalize -> validate; the None short-circuit (an invalid or non-profile
     # URL) is an explicit guard.
     normalized = normalize_profile_url(candidate.source_url, candidate.profile_url_hint)

@@ -64,6 +64,38 @@ def test_build_ui_reactors_tolerates_missing_avatar_key():
     assert reactors[0].reaction_type == "like"
 
 
+def test_build_ui_reactors_captures_group_member_links():
+    """Group-post reactors (/groups/<gid>/user/<uid>/) must be captured, not dropped,
+    with their avatar and a canonical, blockable profile URL.
+    """
+    rows = [
+        {
+            "name": "Sara",
+            "profile_url": "https://www.facebook.com/groups/123/user/456/",
+            "avatar_url": AVATAR_A,
+        },
+        {
+            "name": "Karim",
+            "profile_url": "https://www.facebook.com/groups/123/user/789/",
+            "avatar_url": AVATAR_J,
+        },
+        # Same group member again -> de-duplicated away.
+        {
+            "name": "Sara dup",
+            "profile_url": "https://www.facebook.com/groups/123/user/456/",
+            "avatar_url": None,
+        },
+    ]
+    reactors = build_ui_reactors(POST_URL, "love", "en", rows)
+
+    assert [r.profile_key for r in reactors] == ["456", "789"]
+    by_key = {r.profile_key: r for r in reactors}
+    assert by_key["456"].profile_url == "https://www.facebook.com/profile.php?id=456"
+    assert by_key["456"].avatar_url == AVATAR_A
+    assert by_key["456"].name == "Sara"
+    assert all(r.reaction_type == "love" for r in reactors)
+
+
 # --------------------------------------------------------------------------- #
 # merge_reactors: cross-tab dedup + avatar backfill
 # --------------------------------------------------------------------------- #

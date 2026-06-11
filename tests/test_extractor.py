@@ -41,6 +41,32 @@ def test_parse_reactor_rejects_non_profile_links():
     assert parse_reactor(_candidate(None, "No URL")) is None
 
 
+def test_parse_reactor_group_member_numeric():
+    """A group post links reactors as /groups/<gid>/user/<uid>/ -- a real user.
+
+    The link must canonicalize to the blockable profile, keyed by the user id,
+    not be rejected for containing /groups/.
+    """
+    record = parse_reactor(
+        _candidate("https://www.facebook.com/groups/123456/user/100012345/", "Sara M")
+    )
+    assert record is not None
+    assert record.profile_id == "100012345"
+    assert record.profile_key == "100012345"
+    assert record.name == "Sara M"
+    assert record.profile_url == "https://www.facebook.com/profile.php?id=100012345"
+
+
+def test_parse_reactor_group_member_pfbid_keeps_distinct_key():
+    """A pfbid user id stays the dedup key (not collapsed to 'profile.php')."""
+    record = parse_reactor(
+        _candidate("https://www.facebook.com/groups/123456/user/pfbid0ABCdef/", "Karim")
+    )
+    assert record is not None
+    assert record.profile_key == "pfbid0ABCdef"
+    assert record.profile_url == "https://www.facebook.com/profile.php?id=pfbid0ABCdef"
+
+
 def test_normalize_whitespace_collapses_and_nulls_empty():
     assert normalize_whitespace("  Ahmed   Fathy ") == "Ahmed Fathy"
     assert normalize_whitespace("\tA\nB\r C ") == "A B C"

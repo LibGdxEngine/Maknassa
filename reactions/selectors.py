@@ -140,6 +140,10 @@ NON_PROFILE_PATH_TOKENS: tuple[str, ...] = (
 # A username path is a single segment of allowed chars, e.g. /john.doe.5
 _USERNAME_PATH_RE = re.compile(r"^/([A-Za-z0-9.]{3,})/?$")
 
+# A group post links a reactor as /groups/<gid>/user/<uid>/ -- a real user, not
+# the group itself. Captures <uid> (numeric or pfbid) for canonicalization.
+GROUP_MEMBER_PATH = re.compile(r"/groups/\d+/user/([A-Za-z0-9]+)")
+
 
 _ARABIC_INDIC_DIGITS = "٠١٢٣٤٥٦٧٨٩"
 
