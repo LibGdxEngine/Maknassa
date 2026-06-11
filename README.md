@@ -201,25 +201,32 @@ excluded from the freeze to keep it down. `build/`, `dist/`, and
 
 ## Publishing a release
 
-There is no CI; releases are built and published by hand. On each target OS, build the
-bundle and package its installer, then attach the files to a GitHub Release:
+Installers are built on GitHub's cloud runners and attached to a GitHub Release by the
+[`release-installers`](.github/workflows/release-installers.yml) workflow — native
+installers can't be cross-compiled, so each OS builds its own (`windows-latest`,
+`macos-13`, `ubuntu-latest`). Two ways to run it:
 
 ```bash
-# Linux
-bash packaging/build.sh && bash packaging/linux/build_appimage.sh   # -> dist/Maknassa.AppImage
+# Cut a brand-new release: push a tag and the workflow builds + attaches all three.
+git tag v1.1.0 && git push origin v1.1.0
 
-# macOS
-bash packaging/build.sh && bash packaging/macos/build_dmg.sh        # -> dist/Maknassa.dmg
-
-# Windows (PowerShell; needs Inno Setup, i.e. `iscc` on PATH)
-powershell -ExecutionPolicy Bypass -File packaging\build.ps1
-iscc packaging\windows\maknassa.iss                                 # -> dist\Maknassa-Setup.exe
+# Or attach installers to an EXISTING release (e.g. add Windows/macOS to v1.0.0):
+gh workflow run release-installers.yml -f tag=v1.0.0
+gh run watch        # follow progress; assets appear on the release when it finishes
 ```
 
-Then create a release on GitHub (e.g. tag `v1.0.0`) and upload the three files, keeping
-the exact names `Maknassa-Setup.exe`, `Maknassa.dmg`, and `Maknassa.AppImage` so the
-[Download & install](#download--install) links resolve. Builds are **unsigned** — those
-same steps cover the one-time OS warning for users.
+The workflow keeps the exact filenames `Maknassa-Setup.exe`, `Maknassa.dmg`, and
+`Maknassa.AppImage` so the [Download & install](#download--install) links resolve.
+Builds are **unsigned** — the download steps above cover the one-time OS warning.
+
+To build a single installer by hand on its own OS instead:
+
+```bash
+bash packaging/build.sh && bash packaging/linux/build_appimage.sh   # Linux  -> dist/Maknassa.AppImage
+bash packaging/build.sh && bash packaging/macos/build_dmg.sh        # macOS  -> dist/Maknassa.dmg
+powershell -ExecutionPolicy Bypass -File packaging\build.ps1 \
+  && iscc packaging\windows\maknassa.iss                            # Windows -> dist\Maknassa-Setup.exe
+```
 
 ---
 
@@ -274,13 +281,13 @@ new logic). By contributing you agree your work is licensed under the project's
 ## Roadmap
 
 Done: per-user data dirs, desktop shell, in-app Facebook login, free/open-source
-release with one-click installers (built and published manually).
+release with one-click installers, and a release-installers CI workflow that builds
+and attaches the Windows/macOS/Linux installers on GitHub's cloud runners.
 
 Deferred follow-ups:
 
 - **Code-signing & notarization** — Windows Authenticode, macOS Developer ID (removes
   the unsigned-app warning).
-- **Release CI** — a workflow to rebuild/publish installers on a tag (removed for now).
 - **Auto-update** — version check + download/replace flow.
 - **Multi-account profiles** — make profile/session a first-class per-account object.
 - **Download landing page** — a simple GitHub Pages site with per-OS buttons.

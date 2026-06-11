@@ -1,0 +1,86 @@
+name: release-installers
+
+# Builds the one-click installers on GitHub's cloud runners and attaches them to a
+# GitHub Release. Native installers can't be cross-compiled, so each OS builds its own:
+#   * Windows  -> Maknassa-Setup.exe   (PyInstaller + Inno Setup)
+#   * macOS    -> Maknassa.dmg         (PyInstaller .app + hdiutil), built on Intel so
+#                                       it runs on both Intel and Apple-Silicon (Rosetta)
+#   * Linux    -> Maknassa.AppImage    (PyInstaller + appimagetool)
+#
+# Trigger it two ways:
+#   * Push a tag like v1.0.0           -> builds and attaches to that tag's release.
+#   * Run it by hand (Actions tab or `gh workflow run`) with a `tag` input -> attaches
+#     to an existing release (e.g. v1.0.0 that already has the Linux AppImage).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to attach the installers to"
+        required: true
+        default: "v1.0.0"
+
+permissions:
+  contents: write   # required so the workflow can upload assets to the Release
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset: dist/Maknassa-Setup.exe
+          - os: macos-13          # Intel runner -> universal-ish reach (Intel + Rosetta)
+            asset: dist/Maknassa.dmg
+          - os: ubuntu-latest
+            asset: dist/Maknassa.AppImage
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # ---- Linux ----
+      - name: Build bundle (Linux)
+        if: runner.os == 'Linux'
+        run: bash packaging/build.sh
+      - name: Package AppImage (Linux)
+        if: runner.os == 'Linux'
+        run: bash packaging/linux/build_appimage.sh
+
+      # ---- macOS ----
+      - name: Build bundle (macOS)
+        if: runner.os == 'macOS'
+        run: bash packaging/build.sh
+      - name: Package DMG (macOS)
+        if: runner.os == 'macOS'
+        run: bash packaging/macos/build_dmg.sh
+
+      # ---- Windows ----
+      - name: Build bundle (Windows)
+        if: runner.os == 'Windows'
+        run: powershell -ExecutionPolicy Bypass -File packaging/build.ps1
+      - name: Install Inno Setup (Windows)
+        if: runner.os == 'Windows'
+        run: choco install innosetup --no-progress -y
+      - name: Package installer (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: iscc packaging\windows\maknassa.iss
+
+      - name: Show built asset
+        shell: bash
+        run: ls -lh "${{ matrix.asset }}"
+
+      - name: Attach installer to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          files: ${{ matrix.asset }}
+          fail_on_unmatched_files: true
