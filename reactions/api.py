@@ -35,8 +35,7 @@ Why the shape here looks the way it does:
 
 Browser jobs build their :class:`~reactions.config.ReactionConfig` from the saved
 settings *at submission time* via :func:`reactions.service.session_config`, with
-login forced headed (you cannot sign in to a headless window) exactly as the old
-``_do_login`` did.
+login forced headed (you cannot sign in to a headless window).
 
 The core entry points are imported as *module attributes* (``fetch_reactors``,
 ``login_flow``, ``FacebookBlocker``, ...) precisely so tests can monkeypatch
@@ -61,7 +60,7 @@ from pydantic import BaseModel, Field
 
 from reactions import paths
 from reactions.browser import login_flow
-from reactions.service import FacebookBlocker, session_config
+from reactions.service import FacebookBlocker, human_delay, session_config
 from reactions.ui_fetch import fetch_reactors, in_thread
 
 logger = logging.getLogger(__name__)
@@ -263,9 +262,8 @@ def _settings_config(settings: dict[str, Any], post_url: str = "", *, force_head
 
     ``stop_after`` maps onto ``session_config``'s ``daily_cap`` (its per-run cap;
     0 = unlimited). ``force_headed`` overrides headless for login, which cannot be
-    completed in a headless window -- the same override the old ``_do_login`` used.
-    post_url is threaded through for the fetch path (session_config builds a
-    by-URL config with an empty post_url, so we set it afterward).
+    completed in a headless window. post_url is threaded through for the fetch path
+    (session_config builds a by-URL config with an empty post_url, set afterward).
     """
     config = session_config(
         settings["profile_dir"],
@@ -352,8 +350,6 @@ def _run_block(job: Job, profile_urls: list[str], *, unblock: bool) -> list[Any]
                 # Pause between successes to stay human-paced (mirrors run_batch):
                 # skip the wait on the final item, after the cap, and on cancel.
                 if not last and not (cap and succeeded >= cap) and not job.cancel_requested:
-                    from reactions.service import human_delay
-
                     human_delay(config)
     return outcomes
 

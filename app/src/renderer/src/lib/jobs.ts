@@ -27,8 +27,8 @@ export interface PollOptions<R = unknown, P = JobProgress> {
   onUpdate?: (job: Job<R, P>) => void
 }
 
-// Poll an already-started job to a terminal state. Used both by startJob and by the
-// block flow (which needs the id up front to wire its Cancel button).
+// Poll an already-started job to a terminal state. startJob composes this after the
+// POST; it is also exported on its own so the poll loop can be unit-tested in isolation.
 export function pollJob<R = unknown, P = JobProgress>(
   jobId: string,
   options: PollOptions<R, P> = {}

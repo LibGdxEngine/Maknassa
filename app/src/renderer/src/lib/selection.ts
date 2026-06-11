@@ -36,8 +36,8 @@ export function clearAll(selected: ReadonlySet<string>, visibleKeys: readonly st
   return next
 }
 
-// Profile URLs of the selected reactors, skipping any without a URL (matches
-// streamlit_app._selected_urls). De-duplicated, preserving reactor order.
+// Profile URLs of the selected reactors, skipping any without a URL.
+// De-duplicated, preserving reactor order.
 export function selectedUrls(reactors: UIReactor[], selected: ReadonlySet<string>): string[] {
   const urls: string[] = []
   const seen = new Set<string>()

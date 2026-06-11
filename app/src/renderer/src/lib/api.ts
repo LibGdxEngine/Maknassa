@@ -35,62 +35,52 @@ export class ApiError extends Error {
   }
 }
 
-async function baseFetch(path: string, options: RequestInit = {}): Promise<Response> {
-  const url = `${_apiBase}${path}`
+function baseFetch(path: string, options: RequestInit = {}): Promise<Response> {
   const headers = new Headers(options.headers)
   if (_token) {
     headers.set('X-Maknassa-Token', _token)
   }
-  return fetch(url, { ...options, headers })
+  return fetch(`${_apiBase}${path}`, { ...options, headers })
+}
+
+// A POST/PUT carrying a JSON body. GET goes through baseFetch directly.
+function writeJson(method: string, path: string, body: unknown): Promise<Response> {
+  return baseFetch(path, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+}
+
+// Parse a 2xx JSON response, or throw ApiError carrying the status for the caller's
+// toast wording. The 409 busy case is handled by postJob before it reaches here.
+async function okJson<T>(res: Response, method: string, path: string): Promise<T> {
+  if (!res.ok) {
+    throw new ApiError(res.status, `${method} ${path} failed: ${res.status} ${res.statusText}`)
+  }
+  return res.json() as Promise<T>
 }
 
 export async function get<T>(path: string): Promise<T> {
-  const res = await baseFetch(path)
-  if (!res.ok) {
-    throw new ApiError(res.status, `GET ${path} failed: ${res.status} ${res.statusText}`)
-  }
-  return res.json() as Promise<T>
+  return okJson<T>(await baseFetch(path), 'GET', path)
 }
 
 export async function put<T>(path: string, body: unknown): Promise<T> {
-  const res = await baseFetch(path, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  })
-  if (!res.ok) {
-    throw new ApiError(res.status, `PUT ${path} failed: ${res.status} ${res.statusText}`)
-  }
-  return res.json() as Promise<T>
+  return okJson<T>(await writeJson('PUT', path, body), 'PUT', path)
 }
 
 export async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await baseFetch(path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  })
-  if (!res.ok) {
-    throw new ApiError(res.status, `POST ${path} failed: ${res.status} ${res.statusText}`)
-  }
-  return res.json() as Promise<T>
+  return okJson<T>(await writeJson('POST', path, body), 'POST', path)
 }
 
 // Start a browser job (login/fetch/block/unblock). Returns the job id from the 202
 // envelope, or throws BusyError on a 409 so the caller can surface the busy toast.
 export async function postJob(path: string, body: unknown): Promise<string> {
-  const res = await baseFetch(path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  })
+  const res = await writeJson('POST', path, body)
   if (res.status === 409) {
     const data = (await res.json().catch(() => ({}))) as { job_id?: string }
     throw new BusyError(data.job_id ?? null)
   }
-  if (!res.ok) {
-    throw new ApiError(res.status, `POST ${path} failed: ${res.status} ${res.statusText}`)
-  }
-  const data = (await res.json()) as JobAccepted
+  const data = await okJson<JobAccepted>(res, 'POST', path)
   return data.job_id
 }

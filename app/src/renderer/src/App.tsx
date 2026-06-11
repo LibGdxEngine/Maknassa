@@ -107,8 +107,8 @@ export default function App() {
   }, [])
 
   const handleFetchResult = useCallback((result: FetchResult) => {
-    // A new reactor set always starts unselected and unfiltered (deliberate per-batch
-    // consent for the irreversible block) — mirrors streamlit_app's selection reset.
+    // A new reactor set always starts unselected and unfiltered — deliberate
+    // per-batch consent for the irreversible block.
     setReactors(result.reactors)
     setExpectedTotal(result.expected_total)
     setSelected(new Set())

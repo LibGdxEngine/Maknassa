@@ -1,7 +1,8 @@
-// Reaction-type -> emoji mapping, mirrored from streamlit_app.py REACTION_EMOJI so
-// the desktop UI shows the same badges users already know.
+// Reaction-type -> emoji badges shown beside each reactor.
 
-export const REACTION_EMOJI: Record<string, string> = {
+const FALLBACK_EMOJI = '⚪'
+
+const REACTION_EMOJI: Record<string, string> = {
   like: '👍',
   love: '❤️',
   care: '🤗',
@@ -10,17 +11,14 @@ export const REACTION_EMOJI: Record<string, string> = {
   sad: '😢',
   angry: '😡',
   all: '🔘',
-  unknown: '⚪'
+  unknown: FALLBACK_EMOJI
 }
-
-const FALLBACK_EMOJI = '⚪'
 
 export function reactionEmoji(reactionType: string): string {
   return REACTION_EMOJI[reactionType] ?? FALLBACK_EMOJI
 }
 
-// Icon per BlockOutcome.status, matching streamlit_app._render_outcomes (blocked -> ✅,
-// anything else -> ❌) and the unblock success path.
+// Icon per BlockOutcome.status: a success (blocked / unblocked) vs anything else.
 export function outcomeIcon(status: string): string {
   if (status === 'blocked' || status === 'unblocked') return '✅'
   return '❌'
