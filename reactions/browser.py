@@ -298,6 +298,10 @@ def persistent_page(
         context = playwright.chromium.launch_persistent_context(
             user_data_dir=str(config.profile_dir),
             headless=is_headless,
+            # channel="chromium" makes headless use the full Chromium binary
+            # (--headless=new) instead of the separate headless-shell build, so
+            # the installers ship ONE browser (saves ~250 MB uncompressed).
+            channel="chromium",
             viewport={"width": 1440, "height": 1600},
         )
         try:

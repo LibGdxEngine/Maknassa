@@ -45,7 +45,13 @@ for dist in ("maknassa", "playwright", "pydantic", "platformdirs", "fastapi", "u
 # the retired maknassa.spec used).
 browsers = REPO / "packaging" / "ms-playwright"
 if browsers.exists() and sys.platform != "darwin":
-    datas += [(str(browsers), "ms-playwright")]
+    for item in browsers.iterdir():
+        # Skip the headless-shell build: persistent_page launches with
+        # channel="chromium", so headless runs use the full binary too and the
+        # shell would be ~250 MB of dead weight in every installer.
+        if item.name.startswith("chromium_headless_shell"):
+            continue
+        datas += [(str(item), f"ms-playwright/{item.name}")]
 
 a = Analysis(
     [str(REPO / "reactions" / "backend.py")],

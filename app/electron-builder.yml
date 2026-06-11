@@ -10,11 +10,12 @@ extraResources:
     to: backend
     filter:
       - "**/*"
+# Linux is built as a bare dir; packaging/linux/build_appimage.sh packs it with
+# appimagetool's static runtime (electron-builder's AppImage runtime needs libfuse2).
 linux:
   target:
-    - AppImage
+    - dir
   icon: ../packaging/icons/maknassa.png
-  artifactName: Maknassa.AppImage
 win:
   target:
     - nsis

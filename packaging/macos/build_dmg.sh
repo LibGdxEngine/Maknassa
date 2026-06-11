@@ -33,6 +33,9 @@ if [ -d "$BROWSERS" ]; then
   echo ">> Injecting bundled Chromium into the frozen backend"
   rm -rf "$BACKEND_ROOT/ms-playwright"
   cp -R "$BROWSERS" "$BACKEND_ROOT/ms-playwright"
+  # Headless runs use the full Chromium (channel="chromium" in browser.py); the
+  # headless-shell build is ~250 MB of dead weight, mirror backend.spec and drop it.
+  rm -rf "$BACKEND_ROOT/ms-playwright/chromium_headless_shell-"*
 else
   echo "warning: $BROWSERS missing — DMG will have no bundled Chromium." >&2
 fi

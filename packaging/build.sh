@@ -37,7 +37,9 @@ if [ "$(uname)" = "Darwin" ]; then
   npx electron-builder --mac dir --publish never
   echo ">> Done. Next: bash packaging/macos/build_dmg.sh"
 else
-  npx electron-builder --linux AppImage --publish never
-  cp "$REPO/dist/electron/Maknassa.AppImage" "$REPO/dist/Maknassa.AppImage"
-  echo ">> Done: $REPO/dist/Maknassa.AppImage"
+  # dir target only: packaging/linux/build_appimage.sh wraps the unpacked app with
+  # appimagetool's static (FUSE-free) runtime — electron-builder's own AppImage
+  # runtime needs libfuse2, which stock Ubuntu 22.04+ no longer ships.
+  npx electron-builder --linux dir --publish never
+  bash "$REPO/packaging/linux/build_appimage.sh"
 fi
