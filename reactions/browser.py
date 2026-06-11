@@ -281,6 +281,36 @@ COLLECT_TAB_SCRIPT = (
 # --------------------------------------------------------------------------- #
 # Shared persistent session (used by the scraper and the blocker).
 # --------------------------------------------------------------------------- #
+def _launch_kwargs(profile_dir: str, is_headless: bool) -> dict:
+    """Playwright ``launch_persistent_context`` kwargs, tuned per mode.
+
+    ``channel="chromium"`` makes headless use the full Chromium binary
+    (``--headless=new``) instead of the separate headless-shell build, so the
+    installers ship ONE browser (saves ~250 MB uncompressed).
+
+    Viewport differs by mode:
+
+    * **Headless** (offscreen scraping) -- a fixed, tall emulated viewport renders
+      many reactor rows per pass.
+    * **Headed / interactive** (login, watched block) -- use the REAL window
+      instead. A fixed emulated viewport is taller than the screen and never
+      reflows on resize, so login/confirm controls fall off-screen and are
+      unreachable. ``no_viewport`` lets the page track the window like a normal
+      browser; ``--start-maximized`` opens it full-size.
+    """
+    kwargs: dict = {
+        "user_data_dir": profile_dir,
+        "headless": is_headless,
+        "channel": "chromium",
+    }
+    if is_headless:
+        kwargs["viewport"] = {"width": 1440, "height": 1600}
+    else:
+        kwargs["no_viewport"] = True
+        kwargs["args"] = ["--start-maximized"]
+    return kwargs
+
+
 @contextmanager
 def persistent_page(
     config: ReactionConfig, headless: bool | None = None
@@ -296,13 +326,7 @@ def persistent_page(
     is_headless = config.headless if headless is None else headless
     with sync_playwright() as playwright:
         context = playwright.chromium.launch_persistent_context(
-            user_data_dir=str(config.profile_dir),
-            headless=is_headless,
-            # channel="chromium" makes headless use the full Chromium binary
-            # (--headless=new) instead of the separate headless-shell build, so
-            # the installers ship ONE browser (saves ~250 MB uncompressed).
-            channel="chromium",
-            viewport={"width": 1440, "height": 1600},
+            **_launch_kwargs(str(config.profile_dir), is_headless)
         )
         try:
             page = context.pages[0] if context.pages else context.new_page()

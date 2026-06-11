@@ -11,7 +11,12 @@ from pathlib import Path
 
 import pytest
 
-from reactions.browser import ReactionScraper, collect_records, select_targets
+from reactions.browser import (
+    ReactionScraper,
+    _launch_kwargs,
+    collect_records,
+    select_targets,
+)
 from reactions.config import ReactionConfig
 
 POST_URL = "https://www.facebook.com/some.page/posts/123456789"
@@ -127,3 +132,26 @@ def test_warn_on_undercount_flags_large_gaps(caplog):
     messages = " ".join(r.getMessage() for r in caplog.records)
     assert "angry" in messages
     assert "like" not in messages
+
+
+# --------------------------------------------------------------------------- #
+# Browser launch kwargs: headed sessions track the real window (no fixed viewport
+# that clips login/confirm controls off-screen); headless keeps a fixed viewport.
+# --------------------------------------------------------------------------- #
+def test_launch_kwargs_headed_uses_real_window():
+    kwargs = _launch_kwargs("/tmp/profile", is_headless=False)
+    assert kwargs["no_viewport"] is True
+    assert kwargs["args"] == ["--start-maximized"]
+    assert "viewport" not in kwargs  # a fixed viewport would clip the window
+    assert kwargs["headless"] is False
+    assert kwargs["channel"] == "chromium"
+    assert kwargs["user_data_dir"] == "/tmp/profile"
+
+
+def test_launch_kwargs_headless_uses_fixed_viewport():
+    kwargs = _launch_kwargs("/tmp/profile", is_headless=True)
+    assert kwargs["viewport"] == {"width": 1440, "height": 1600}
+    assert "no_viewport" not in kwargs
+    assert "args" not in kwargs
+    assert kwargs["headless"] is True
+    assert kwargs["channel"] == "chromium"
