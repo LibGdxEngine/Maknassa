@@ -24,9 +24,14 @@ const env = {
 const app = await electron.launch({ args: [path.join(appDir, 'out', 'main', 'index.js')], env })
 try {
   const window = await app.firstWindow()
-  await window.waitForSelector('text=Backend: ok', { timeout: 30_000 })
+  await window.waitForSelector('text=Maknassa', { timeout: 30_000 })
+  // The app is healthy when the connect gate and fetch form have rendered
+  // (session + settings loaded over the authed API, no error banner).
+  await window.waitForSelector('text=Connect to Facebook', { timeout: 30_000 })
+  await window.waitForSelector('text=Fetch reactors', { timeout: 30_000 })
   const text = await window.locator('body').innerText()
-  console.log('RENDERER OK:', text.split('\n').find((l) => l.includes('Backend:')))
+  console.log('RENDERER OK — UI sections:', ['Maknassa', 'Connect to Facebook', 'Fetch reactors']
+    .filter((s) => text.includes(s)).join(' | '))
   await window.screenshot({ path: shot })
   console.log('SCREENSHOT:', shot)
   console.log('SMOKE RESULT: PASS')
