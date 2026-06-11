@@ -78,7 +78,8 @@ browser.
 ```
 ┌─────────────────────────────┐     ┌──────────────────────────────┐
 │  maknassa-gui (desktop.py)  │     │   maknassa (cli.py)          │
-│  pywebview native window    │     │   argparse subcommands       │
+│  native window (pywebview   │     │   argparse subcommands       │
+│  or bundled Chromium --app) │     │        │                     │
 │        │                    │     │        │                     │
 │        ▼ localhost:PORT     │     │        │                     │
 │  Streamlit server (child    │     │        │                     │
@@ -99,7 +100,9 @@ browser.
 - **Desktop shell** (`reactions/desktop.py`): picks a free localhost port, starts
   Streamlit in a **child process** (so Streamlit's signal handlers get a real main
   thread and a PyInstaller-frozen build can re-exec itself), waits for it to come up,
-  then opens it in a `pywebview` window. Closing the window stops the server.
+  then opens it in a native window — `pywebview` where a backend exists (WebView2 on
+  Windows, WKWebView on macOS, GTK/Qt on Linux), otherwise the bundled Playwright
+  Chromium in chromeless `--app=` mode. Closing the window stops the server.
 - **Streamlit UI** (`streamlit_app.py`): the in-window UI. The one-time Facebook login
   and each fetch/block run Playwright's sync API on a worker thread
   (`reactions/ui_fetch.in_thread`) so it never collides with Streamlit's event loop.

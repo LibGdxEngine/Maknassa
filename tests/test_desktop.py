@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import socket
+import sys
 from pathlib import Path
 
 from reactions import desktop
+
+
+def _touch(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"")
+    return path
 
 
 def test_streamlit_argv_is_headless_localhost_with_port():
@@ -43,6 +50,35 @@ def test_wait_for_server_true_when_listening():
         assert desktop.wait_for_server(port, timeout_s=2.0) is True
     finally:
         srv.close()
+
+
+def test_find_bundled_chromium_picks_headed_chrome_not_headless_shell(monkeypatch, tmp_path):
+    chrome = _touch(tmp_path / "chromium-1208" / "chrome-linux64" / "chrome")
+    _touch(
+        tmp_path
+        / "chromium_headless_shell-1208"
+        / "chrome-headless-shell-linux64"
+        / "chrome-headless-shell"
+    )
+    monkeypatch.setattr(desktop, "resolve_browsers_path", lambda: tmp_path)
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert desktop.find_bundled_chromium() == chrome
+
+
+def test_find_bundled_chromium_none_without_bundled_browsers(monkeypatch):
+    monkeypatch.setattr(desktop, "resolve_browsers_path", lambda: None)
+    assert desktop.find_bundled_chromium() is None
+
+
+def test_pywebview_backend_needs_gi_or_qtpy_on_linux(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(desktop.importlib.util, "find_spec", lambda name: None)
+    assert desktop._pywebview_has_backend() is False
+
+
+def test_pywebview_backend_assumed_present_off_linux(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert desktop._pywebview_has_backend() is True
 
 
 def test_wait_for_server_false_when_down():

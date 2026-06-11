@@ -3,7 +3,16 @@
 ``maknassa-gui`` starts the project's Streamlit app on a random localhost port (in
 a child process so Streamlit's signal handlers get a real main thread, and so a
 PyInstaller-frozen build can re-exec itself cleanly), waits for it to come up,
-then opens it in a ``pywebview`` window. Closing the window stops the server.
+then opens it in a native window. Closing the window stops the server.
+
+The window itself is opened by the first of these that works:
+
+1. ``pywebview`` -- the built-in backends on Windows (WebView2) and macOS
+   (WKWebView), or GTK/Qt on Linux when the Python bindings are importable.
+   Frozen Linux builds never ship those bindings, so there it is skipped.
+2. The bundled Playwright Chromium in ``--app=`` mode -- a chromeless app
+   window with no extra dependencies, since the scraper ships Chromium anyway.
+3. The user's default browser (last resort; the server runs until Ctrl-C).
 
 Nothing here talks to Facebook -- that all still happens in the existing
 ``reactions`` core, which the Streamlit app drives on its own worker thread.
@@ -16,6 +25,7 @@ Env knobs:
 
 from __future__ import annotations
 
+import importlib.util
 import multiprocessing
 import os
 import socket
@@ -88,6 +98,111 @@ def _apply_runtime_env() -> None:
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers)
 
 
+# Headed Chromium inside the bundled Playwright browsers dir, per platform.
+# (The "chromium-*" prefix deliberately skips "chromium_headless_shell-*".)
+_CHROMIUM_GLOBS = {
+    "linux": "chromium-*/chrome-linux*/chrome",
+    "darwin": "chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium",
+    "win32": "chromium-*/chrome-win*/chrome.exe",
+}
+
+
+def find_bundled_chromium() -> Path | None:
+    """The bundled headed Chromium executable, if this build ships one."""
+    browsers = resolve_browsers_path()
+    if browsers is None:
+        return None
+    key = "linux" if sys.platform.startswith("linux") else sys.platform
+    pattern = _CHROMIUM_GLOBS.get(key)
+    if pattern is None:
+        return None
+    matches = sorted(browsers.glob(pattern))
+    return matches[-1] if matches else None
+
+
+def _pywebview_has_backend() -> bool:
+    """Whether pywebview has a usable GUI backend on this machine.
+
+    Windows (WebView2) and macOS (WKWebView) backends are built in. On Linux,
+    pywebview needs the GTK (``gi``) or Qt (``qtpy``) Python bindings; probing
+    for them up front avoids pywebview's noisy import tracebacks when absent
+    (which is always the case in the frozen Linux build -- they aren't bundled).
+    """
+    if not sys.platform.startswith("linux"):
+        return True
+    return any(importlib.util.find_spec(mod) is not None for mod in ("gi", "qtpy"))
+
+
+def _try_pywebview(url: str) -> bool:
+    """Show ``url`` in a pywebview window. False when no backend is usable."""
+    if not _pywebview_has_backend():
+        return False
+    try:
+        import webview
+        from webview.errors import WebViewException
+    except ImportError:
+        return False
+    try:
+        webview.create_window(WINDOW_TITLE, url, width=1280, height=900)
+        webview.start()
+    except WebViewException:
+        return False
+    return True
+
+
+def _run_chromium_window(chrome: Path, url: str) -> None:
+    """Show ``url`` in the bundled Chromium as a chromeless ``--app=`` window.
+
+    Blocks until the window is closed. A throwaway profile keeps the GUI shell
+    out of the user's real browser profile (and out of the Playwright profile
+    that holds the Facebook login). On kernels that forbid Chromium's
+    unprivileged-userns sandbox (e.g. stock Ubuntu >= 24.04) the first attempt
+    dies instantly, so retry once without the sandbox -- this window only ever
+    renders our own localhost UI, never remote content.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    profile = tempfile.mkdtemp(prefix="maknassa-gui-")
+    argv = [
+        str(chrome),
+        f"--app={url}",
+        f"--user-data-dir={profile}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--window-size=1280,900",
+    ]
+    if sys.platform.startswith("linux"):
+        argv.append("--class=Maknassa")
+    try:
+        started = time.monotonic()
+        if subprocess.call(argv) != 0 and time.monotonic() - started < 5.0:
+            subprocess.call([*argv, "--no-sandbox"])
+    finally:
+        # Chromium's helper processes can outlive the main process briefly and
+        # write into the profile mid-delete, so retry until the dir is gone.
+        for _ in range(5):
+            shutil.rmtree(profile, ignore_errors=True)
+            if not os.path.exists(profile):
+                break
+            time.sleep(0.5)
+
+
+def _open_native_window(url: str) -> bool:
+    """Open ``url`` in a native window and block until it closes.
+
+    Returns False only when every windowed option is unavailable.
+    """
+    if _try_pywebview(url):
+        return True
+    chrome = find_bundled_chromium()
+    if chrome is not None:
+        _run_chromium_window(chrome, url)
+        return True
+    return False
+
+
 def _serve(script_path: str, port: int) -> None:
     """Child-process entry point: run Streamlit's CLI in this process's main thread."""
     _apply_runtime_env()
@@ -141,11 +256,17 @@ def main() -> int:
             server.terminate()
         return 0
 
-    import webview  # imported lazily so headless/no-window runs need no GUI backend
-
-    webview.create_window(WINDOW_TITLE, url, width=1280, height=900)
     try:
-        webview.start()
+        if not _open_native_window(url):
+            # Last resort: no pywebview backend and no bundled Chromium.
+            import webbrowser
+
+            print(f"Maknassa UI running in your browser: {url}\nPress Ctrl-C to stop.")
+            webbrowser.open(url)
+            try:
+                server.join()
+            except KeyboardInterrupt:
+                pass
     finally:
         server.terminate()
     return 0
