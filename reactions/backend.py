@@ -48,10 +48,10 @@ _WATCHDOG_INTERVAL_S = 2.0
 def free_port(host: str = _HOST) -> int:
     """An OS-assigned free TCP port (bind to 0, read it back), or the env pin.
 
-    Mirrors ``desktop.free_port``: pinning via ``MAKNASSA_BACKEND_PORT`` lets a test
-    fix the port before spawning; otherwise the kernel hands us an unused one, which
-    we close and immediately reuse for uvicorn (a tiny race the loopback-only,
-    single-launch context makes harmless).
+    Pinning via ``MAKNASSA_BACKEND_PORT`` lets a test fix the port before spawning;
+    otherwise the kernel hands us an unused one, which we close and immediately
+    reuse for uvicorn (a tiny race the loopback-only, single-launch context makes
+    harmless).
     """
     pinned = os.environ.get(_PORT_ENV)
     if pinned:

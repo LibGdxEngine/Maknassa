@@ -4,6 +4,15 @@ import { spawnBackend, stopBackend } from './backend'
 import type { BackendHandshake } from './backend'
 import { is } from '@electron-toolkit/utils'
 
+// Electron's setuid sandbox helper cannot work from an AppImage (squashfs mounts
+// nosuid) and Ubuntu 24.04+ also blocks the unprivileged-userns fallback, so a
+// double-clicked AppImage would die at startup. The renderer only ever loads our
+// local bundle and the localhost API — never remote content — so dropping the
+// sandbox in the AppImage case is an acceptable trade for "it just works".
+if (process.platform === 'linux' && process.env.APPIMAGE) {
+  app.commandLine.appendSwitch('no-sandbox')
+}
+
 let handshake: BackendHandshake | null = null
 
 function createWindow(hs: BackendHandshake): BrowserWindow {

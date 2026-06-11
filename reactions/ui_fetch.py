@@ -1,4 +1,4 @@
-"""In-memory reactor fetch for the Streamlit UI -- names, reaction types, avatars.
+"""In-memory reactor fetch for the desktop UI -- names, reaction types, avatars.
 
 The CLI scraper (:mod:`reactions.browser`) persists reactors to SQLite but never
 captures their avatar image, which the UI needs as a thumbnail. Rather than
@@ -13,8 +13,9 @@ pure normalization seam (``build_ui_reactors`` / ``merge_reactors``), which is
 unit-testable without a browser.
 
 Sync Playwright refuses to run inside a thread that already owns a running asyncio
-loop (Streamlit's script thread can have one), so :func:`in_thread` runs the
-blocking work on a fresh thread that has none. Drive a fetch from Streamlit with::
+loop (the FastAPI sidecar's server thread does), so :func:`in_thread` runs the
+blocking work on a fresh thread that has none. :mod:`reactions.api` drives every
+browser job through it::
 
     reactors = in_thread(fetch_reactors, config)
 """
@@ -45,7 +46,7 @@ T = TypeVar("T")
 
 
 class UIReactor(BaseModel):
-    """One reactor as the Streamlit UI needs it: identity + reaction + thumbnail."""
+    """One reactor as the desktop UI needs it: identity + reaction + thumbnail."""
 
     name: str | None
     profile_url: str | None
@@ -93,7 +94,7 @@ def in_thread(fn: Callable[..., T], *args, **kwargs) -> T:
     """Run ``fn(*args, **kwargs)`` on a fresh thread and return its result.
 
     Playwright's *sync* API raises if it detects a running asyncio event loop in
-    the current thread, which Streamlit's script-runner thread can have. A brand
+    the current thread, which the API sidecar's uvicorn thread always has. A brand
     new worker thread owns no loop, so the blocking browser work runs there. The
     return value is forwarded and any exception is re-raised in the caller.
     """
@@ -196,8 +197,7 @@ def fetch_reactors(config: ReactionConfig) -> FetchResult:
     """Open a fresh logged-in session, navigate to the post, and fetch reactors.
 
     The browser-driving entry point for the UI. Call it through :func:`in_thread`
-    from Streamlit so the sync Playwright session never collides with Streamlit's
-    event loop.
+    so the sync Playwright session never collides with the API server's event loop.
     """
     with persistent_page(config) as (_context, page):
         navigate(page, config.post_url, config)

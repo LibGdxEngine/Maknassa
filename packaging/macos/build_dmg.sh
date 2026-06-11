@@ -1,47 +1,45 @@
 #!/usr/bin/env bash
-# Package the PyInstaller .app (dist/Maknassa.app) into a drag-to-Applications DMG.
+# Package the Electron Maknassa.app into a drag-to-Applications DMG.
 #
-#   bash packaging/build.sh            # produces dist/Maknassa.app (mac BUNDLE in the spec)
+#   bash packaging/build.sh            # produces dist/electron/mac*/Maknassa.app
 #   bash packaging/macos/build_dmg.sh  # produces dist/Maknassa.dmg
 #
-# Uses hdiutil (ships with macOS) so there's no extra dependency. The version-less
-# output name keeps the "latest" download link stable.
+# Injects the Playwright Chromium into the app's frozen-backend resources first:
+# PyInstaller can't bundle it on macOS (backend.spec skips it there) because its
+# ad-hoc per-file re-signing rejects Chromium's nested-.app entry binary. Copying
+# it in afterwards and deep-signing the WHOLE app signs the nested .app correctly.
+# Uses hdiutil (ships with macOS) so there's no extra dependency.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 
-APP="$REPO/dist/Maknassa.app"
+APP="$(find "$REPO/dist/electron" -maxdepth 2 -name "Maknassa.app" -print -quit)"
 DMG="$REPO/dist/Maknassa.dmg"
 
-if [ ! -d "$APP" ]; then
-  echo "error: $APP not found — run packaging/build.sh on macOS first." >&2
+if [ -z "$APP" ] || [ ! -d "$APP" ]; then
+  echo "error: Maknassa.app not found under dist/electron — run packaging/build.sh on macOS first." >&2
   exit 1
 fi
 
-# Inject the bundled Chromium into the .app. PyInstaller can't bundle it on macOS
-# (maknassa.spec skips it there): it ad-hoc re-signs every collected Mach-O, and
-# codesign rejects Chromium's inner executable because it's the entry binary of a
-# nested .app. So we copy Chromium in here, beside streamlit_app.py — i.e. at the same
-# _MEIPASS root that reactions.desktop.resolve_browsers_path() reads at runtime
-# (bundle_dir()/ms-playwright) — then sign the whole app, which signs the nested
-# Chromium .app correctly (unlike PyInstaller's per-file approach).
 BROWSERS="$REPO/packaging/ms-playwright"
 if [ -d "$BROWSERS" ]; then
-  MEIPASS="$(dirname "$(find "$APP/Contents" -name streamlit_app.py -print -quit)")"
-  if [ ! -d "$MEIPASS" ]; then
-    echo "error: streamlit_app.py not found in $APP — can't locate the bundle root." >&2
+  # The frozen backend reads <bundle>/ms-playwright (sys._MEIPASS = _internal/).
+  BACKEND_ROOT="$APP/Contents/Resources/backend/_internal"
+  if [ ! -d "$BACKEND_ROOT" ]; then
+    echo "error: $BACKEND_ROOT not found — was the backend embedded via extraResources?" >&2
     exit 1
   fi
-  echo ">> Injecting bundled Chromium into ${MEIPASS#$REPO/}/ms-playwright"
-  rm -rf "$MEIPASS/ms-playwright"
-  cp -R "$BROWSERS" "$MEIPASS/ms-playwright"
-  echo ">> Ad-hoc signing the app (arm64 requires a valid signature; --deep covers the nested Chromium .app)"
-  xattr -cr "$APP"                       # strip detritus codesign would reject
-  codesign --force --deep --sign - "$APP"
+  echo ">> Injecting bundled Chromium into the frozen backend"
+  rm -rf "$BACKEND_ROOT/ms-playwright"
+  cp -R "$BROWSERS" "$BACKEND_ROOT/ms-playwright"
 else
   echo "warning: $BROWSERS missing — DMG will have no bundled Chromium." >&2
 fi
+
+echo ">> Ad-hoc signing the app (arm64 requires a valid signature; --deep covers nested .apps)"
+xattr -cr "$APP"
+codesign --force --deep --sign - "$APP"
 
 STAGING="$(mktemp -d)"
 trap 'rm -rf "$STAGING"' EXIT

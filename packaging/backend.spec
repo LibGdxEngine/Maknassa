@@ -9,6 +9,7 @@
 # (packaging/build.sh wraps this, installs the browser first, then runs
 # electron-builder which embeds dist/maknassa-backend/ via extraResources.)
 
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metadata
@@ -36,9 +37,14 @@ for dist in ("maknassa", "playwright", "pydantic", "platformdirs", "fastapi", "u
     datas += copy_metadata(dist)
 
 # Bundled Playwright Chromium (build.sh installs it into packaging/ms-playwright).
-# reactions.api points PLAYWRIGHT_BROWSERS_PATH at <bundle>/ms-playwright when frozen.
+# reactions.backend points PLAYWRIGHT_BROWSERS_PATH at <bundle>/ms-playwright when frozen.
+#
+# macOS exception: PyInstaller ad-hoc re-signs every Mach-O it collects and codesign
+# rejects Chromium's nested-.app entry binary, so packaging/macos/build_dmg.sh injects
+# Chromium post-build and deep-signs the whole Electron .app instead (same approach
+# the retired maknassa.spec used).
 browsers = REPO / "packaging" / "ms-playwright"
-if browsers.exists():
+if browsers.exists() and sys.platform != "darwin":
     datas += [(str(browsers), "ms-playwright")]
 
 a = Analysis(

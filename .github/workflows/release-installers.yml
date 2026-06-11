@@ -1,20 +1,19 @@
 name: release-installers
 
 # Builds the one-click installers on GitHub's cloud runners and attaches them to a
-# GitHub Release. Native installers can't be cross-compiled, so each OS builds its own:
-#   * Windows  -> Maknassa-Setup.exe   (PyInstaller + Inno Setup)
-#   * macOS    -> Maknassa.dmg         (PyInstaller .app + hdiutil) on Apple Silicon.
-#                                       GitHub's Intel macOS runners (macos-13) are
-#                                       backlogged for hours on public repos, so we
-#                                       target macos-latest (arm64). This .dmg runs
-#                                       natively on Apple-Silicon Macs; Intel Macs need
-#                                       a separate macos-13 build (add when runners free).
-#   * Linux    -> Maknassa.AppImage    (PyInstaller + appimagetool)
+# GitHub Release. Each installer is an Electron shell with the PyInstaller-frozen
+# Python backend (and its Playwright Chromium) embedded as a resource:
+#   * Windows  -> Maknassa-Setup.exe   (electron-builder NSIS)
+#   * macOS    -> Maknassa.dmg         (electron-builder .app + Chromium injection +
+#                                       ad-hoc deep-sign + hdiutil) on Apple Silicon.
+#                                       Intel Macs need a separate macos-13 build
+#                                       (GitHub's Intel runners are backlogged).
+#   * Linux    -> Maknassa.AppImage    (electron-builder AppImage)
 #
 # Trigger it two ways:
 #   * Push a tag like v1.0.0           -> builds and attaches to that tag's release.
 #   * Run it by hand (Actions tab or `gh workflow run`) with a `tag` input -> attaches
-#     to an existing release (e.g. v1.0.0 that already has the Linux AppImage).
+#     to an existing release.
 
 on:
   push:
@@ -38,7 +37,7 @@ jobs:
         include:
           - os: windows-latest
             asset: dist/Maknassa-Setup.exe
-          - os: macos-latest      # Apple Silicon (arm64); Intel runners are backlogged
+          - os: macos-latest      # Apple Silicon (arm64)
             asset: dist/Maknassa.dmg
           - os: ubuntu-latest
             asset: dist/Maknassa.AppImage
@@ -50,20 +49,19 @@ jobs:
         with:
           python-version: "3.11"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
       # ---- Linux ----
-      - name: Build bundle (Linux)
+      - name: Build AppImage (Linux)
         if: runner.os == 'Linux'
         run: bash packaging/build.sh
-      - name: Package AppImage (Linux)
-        if: runner.os == 'Linux'
-        # desktop-file-utils provides desktop-file-validate, which appimagetool
-        # requires but current ubuntu-latest runner images no longer preinstall.
-        run: |
-          sudo apt-get update -q && sudo apt-get install -yq desktop-file-utils
-          bash packaging/linux/build_appimage.sh
 
       # ---- macOS ----
-      - name: Build bundle (macOS)
+      - name: Build app (macOS)
         if: runner.os == 'macOS'
         run: bash packaging/build.sh
       - name: Package DMG (macOS)
@@ -71,16 +69,9 @@ jobs:
         run: bash packaging/macos/build_dmg.sh
 
       # ---- Windows ----
-      - name: Build bundle (Windows)
+      - name: Build installer (Windows)
         if: runner.os == 'Windows'
         run: powershell -ExecutionPolicy Bypass -File packaging/build.ps1
-      - name: Install Inno Setup (Windows)
-        if: runner.os == 'Windows'
-        run: choco install innosetup --no-progress -y
-      - name: Package installer (Windows)
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: iscc packaging\windows\maknassa.iss
 
       - name: Show built asset
         shell: bash
