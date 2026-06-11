@@ -15,7 +15,7 @@
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all, copy_metadata
+from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metadata
 
 REPO = Path(SPECPATH).parent  # packaging/ -> repo root
 ICON_DIR = REPO / "packaging" / "icons"
@@ -27,7 +27,10 @@ MAC_ICON = str(_MAC_ICON) if _MAC_ICON.exists() else None
 
 datas = []
 binaries = []
-hiddenimports = ["reactions", "reactions.cli", "reactions.desktop"]
+# streamlit_app.py ships as DATA (never analyzed by PyInstaller), so every
+# reactions.* module it imports must be forced in — a hand-picked list silently
+# drops whatever the UI imports next (v1.0.0 shipped without reactions.ui_fetch).
+hiddenimports = collect_submodules("reactions")
 
 # Pull data files, binaries, and submodules for the heavy/lazy packages.
 # NB: pandas/pyarrow/altair are deliberately NOT collected — they back Streamlit's
