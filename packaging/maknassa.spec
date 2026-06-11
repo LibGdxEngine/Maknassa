@@ -60,8 +60,17 @@ datas += [(str(REPO / "streamlit_app.py"), ".")]
 
 # Bundled Playwright Chromium (build.sh installs it into packaging/ms-playwright).
 # desktop._apply_runtime_env() points PLAYWRIGHT_BROWSERS_PATH at this folder.
+#
+# macOS exception: do NOT bundle it through PyInstaller here. On Apple Silicon
+# PyInstaller ad-hoc re-signs every Mach-O it collects, and `codesign` rejects
+# Chromium's main executable ("bundle format unrecognized, invalid, or unsuitable")
+# because it's the entry binary of a nested .app bundle and must be signed as a
+# bundle, not as a bare file. Instead packaging/macos/build_dmg.sh injects Chromium
+# into the built .app (beside streamlit_app.py, i.e. the same _MEIPASS root the app
+# reads at runtime) and signs the whole app with `codesign --deep`, which handles the
+# nested .app correctly. Windows/Linux have no such constraint and bundle it normally.
 browsers = REPO / "packaging" / "ms-playwright"
-if browsers.exists():
+if browsers.exists() and sys.platform != "darwin":
     datas += [(str(browsers), "ms-playwright")]
 
 a = Analysis(
