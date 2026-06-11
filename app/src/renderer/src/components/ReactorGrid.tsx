@@ -38,23 +38,24 @@ export function ReactorGrid({
 
   return (
     <section className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
+      {/* Controls bar */}
+      <div className="flex flex-wrap items-center gap-1.5">
         <button
           type="button"
           onClick={() => onSelectedChange(selectAll(selected, [...visibleKeys]))}
-          className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-slate-200 transition hover:border-white/20"
+          className="chip-toggle rounded-[6px] border border-[rgba(255,255,255,0.08)] bg-[#131926] px-3 py-1.5 text-[11px] font-medium text-[#9aa5b8] hover:border-[rgba(255,255,255,0.16)] hover:text-[#e8edf5] focus-visible:outline-2 focus-visible:outline-[#3b82f6] focus-visible:outline-offset-1"
         >
           Select all
         </button>
         <button
           type="button"
           onClick={() => onSelectedChange(clearAll(selected, [...visibleKeys]))}
-          className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-slate-200 transition hover:border-white/20"
+          className="chip-toggle rounded-[6px] border border-[rgba(255,255,255,0.08)] bg-[#131926] px-3 py-1.5 text-[11px] font-medium text-[#9aa5b8] hover:border-[rgba(255,255,255,0.16)] hover:text-[#e8edf5] focus-visible:outline-2 focus-visible:outline-[#3b82f6] focus-visible:outline-offset-1"
         >
           Deselect all
         </button>
 
-        <div className="mx-1 h-5 w-px bg-white/10" />
+        <span className="mx-1 h-4 w-px bg-[rgba(255,255,255,0.08)]" />
 
         {types.map((type) => {
           const active = activeFilters.has(type)
@@ -64,21 +65,27 @@ export function ReactorGrid({
               type="button"
               onClick={() => onFiltersChange(toggle(activeFilters, type))}
               aria-pressed={active}
-              className={`rounded-full border px-2.5 py-1 text-xs transition ${
+              className={[
+                'chip-toggle rounded-full border px-2.5 py-1 text-[11px] focus-visible:outline-2 focus-visible:outline-[#3b82f6] focus-visible:outline-offset-1',
                 active
-                  ? 'border-sky-500/60 bg-sky-500/15 text-sky-200'
-                  : 'border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/20'
-              }`}
+                  ? 'border-[rgba(59,130,246,0.5)] bg-[rgba(59,130,246,0.12)] text-[#60a5fa]'
+                  : 'border-[rgba(255,255,255,0.08)] bg-[#131926] text-[#9aa5b8] hover:border-[rgba(255,255,255,0.16)] hover:text-[#e8edf5]',
+              ].join(' ')}
             >
-              {reactionEmoji(type)} {type} ({counts[type] ?? 0})
+              {reactionEmoji(type)}{' '}
+              <span className="font-medium">{type}</span>
+              <span className="ml-1 tabular-nums text-[#4e5d73]">({counts[type] ?? 0})</span>
             </button>
           )
         })}
 
-        <span className="ml-auto text-xs font-medium text-slate-300">{selectedCount} selected</span>
+        <span className="ml-auto text-[11px] font-medium text-[#4e5d73] tabular-nums">
+          <span className="text-[#9aa5b8]">{selectedCount}</span> selected
+        </span>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      {/* Card grid */}
+      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
         {visible.map((reactor) => (
           <ReactorCard
             key={reactor.profile_key}
@@ -90,7 +97,9 @@ export function ReactorGrid({
       </div>
 
       {visible.length === 0 && (
-        <p className="text-sm text-slate-500">No reactors match the active filter.</p>
+        <div className="flex flex-col items-center justify-center py-10 text-center">
+          <p className="text-sm text-[#4e5d73]">No reactors match the active filter.</p>
+        </div>
       )}
     </section>
   )

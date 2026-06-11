@@ -1,5 +1,5 @@
 // Main fetch panel: post URL input + "Fetch reactors". Runs the fetch job, shows a
-// spinner while running, and renders a completeness summary meter on done.
+// skeleton grid while running, and renders a completeness summary meter on done.
 
 import { useState } from 'react'
 import { BusyError } from '../lib/api'
@@ -56,26 +56,35 @@ export function FetchSection({
 
   return (
     <section className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row">
-        <input
-          type="text"
-          value={postUrl}
-          onChange={(e) => setPostUrl(e.target.value)}
-          placeholder="https://www.facebook.com/.../posts/..."
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !running) fetchReactors()
-          }}
-          className="flex-1 rounded-lg border border-white/10 bg-slate-900/60 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500"
-        />
+      {/* URL input + button row */}
+      <div className="flex flex-col gap-2.5 sm:flex-row">
+        <div className="relative flex-1">
+          <div className="pointer-events-none absolute inset-y-0 left-3 flex items-center">
+            <svg className="h-3.5 w-3.5 text-[#4e5d73]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+            </svg>
+          </div>
+          <input
+            type="text"
+            value={postUrl}
+            onChange={(e) => setPostUrl(e.target.value)}
+            placeholder="https://www.facebook.com/.../posts/..."
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !running) fetchReactors()
+            }}
+            className="h-10 w-full rounded-[10px] border border-[rgba(255,255,255,0.08)] bg-[#131926] pl-9 pr-3 text-sm text-[#e8edf5] placeholder:text-[#4e5d73] outline-none transition focus:border-[rgba(59,130,246,0.5)] focus:ring-2 focus:ring-[rgba(59,130,246,0.12)] focus:bg-[#1a2235]"
+          />
+        </div>
         <button
           type="button"
           onClick={fetchReactors}
           disabled={running}
-          className="flex items-center justify-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-60"
+          className="flex h-10 items-center justify-center gap-2 rounded-[10px] bg-[#1d4ed8] px-5 text-sm font-semibold text-white transition-all duration-150 hover:bg-[#2563eb] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-[#3b82f6] focus-visible:outline-offset-2 whitespace-nowrap"
+          style={{ backgroundImage: 'linear-gradient(to bottom, rgba(255,255,255,0.07) 0%, transparent 100%)' }}
         >
           {running ? (
             <>
-              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+              <span className="h-3.5 w-3.5 rounded-full border-2 border-white border-t-transparent animate-spin" />
               Fetching…
             </>
           ) : (
@@ -84,16 +93,40 @@ export function FetchSection({
         </button>
       </div>
 
+      {/* Skeleton grid while fetching */}
       {running && (
-        <p className="text-xs text-slate-400">
-          Opening the post and collecting reactors… (a browser window may open)
-        </p>
+        <div className="space-y-3">
+          <p className="text-xs text-[#4e5d73]">
+            Opening the post and collecting reactors… (a browser window may open)
+          </p>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <SkeletonCard key={i} delay={i * 0.08} />
+            ))}
+          </div>
+        </div>
       )}
 
+      {/* Summary meter after fetch */}
       {reactors !== null && !running && (
         <SummaryMeter reactors={reactors} expectedTotal={expectedTotal} />
       )}
     </section>
+  )
+}
+
+function SkeletonCard({ delay }: { delay: number }) {
+  return (
+    <div
+      className="flex items-center gap-3 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[#131926] p-3 skeleton-pulse"
+      style={{ animationDelay: `${delay}s` }}
+    >
+      <div className="h-11 w-11 shrink-0 rounded-full bg-[#1a2235]" />
+      <div className="flex-1 space-y-2">
+        <div className="h-3 w-3/4 rounded-full bg-[#1a2235]" />
+        <div className="h-2.5 w-1/2 rounded-full bg-[#1a2235]" />
+      </div>
+    </div>
   )
 }
 
@@ -113,36 +146,38 @@ function SummaryMeter({
       : `${captured} reactor${captured === 1 ? '' : 's'}`
 
   if (captured === 0 && expectedTotal === 0) {
-    return <p className="text-sm text-slate-400">No reactors found for that post.</p>
+    return <p className="text-xs text-[#4e5d73]">No reactors found for that post.</p>
   }
 
   return (
     <div
-      className={`rounded-xl border px-4 py-3 ${
-        shortfall ? 'border-amber-500/40 bg-amber-500/10' : 'border-white/10 bg-white/[0.03]'
+      className={`rounded-[10px] border px-4 py-3 ${
+        shortfall
+          ? 'border-[rgba(251,191,36,0.35)] bg-[rgba(251,191,36,0.06)]'
+          : 'border-[rgba(255,255,255,0.06)] bg-[#131926]'
       }`}
     >
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className={`text-sm font-semibold ${shortfall ? 'text-amber-200' : 'text-slate-100'}`}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className={`text-sm font-semibold tabular-nums ${shortfall ? 'text-[#fbbf24]' : 'text-[#e8edf5]'}`}>
           {headline}
         </span>
       </div>
-      <div className="mt-2 flex flex-wrap gap-2">
+      <div className="mt-2.5 flex flex-wrap gap-1.5">
         {Object.entries(counts)
           .sort(([a], [b]) => a.localeCompare(b))
           .map(([type, n]) => (
             <span
               key={type}
-              className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-slate-900/60 px-2.5 py-1 text-xs text-slate-200"
+              className="inline-flex items-center gap-1 rounded-full border border-[rgba(255,255,255,0.08)] bg-[#1a2235] px-2.5 py-0.5 text-[11px] text-[#9aa5b8] tabular-nums"
             >
-              {reactionEmoji(type)} {type}: {n}
+              {reactionEmoji(type)} <span className="text-[#e8edf5] font-medium">{n}</span> {type}
             </span>
           ))}
       </div>
       {shortfall && (
-        <p className="mt-2 text-xs leading-snug text-amber-200/90">
+        <p className="mt-2 text-[11px] leading-snug text-[#fbbf24]/80">
           {expectedTotal - captured} reactor(s) not captured. Facebook may have throttled
-          scrolling, or some accounts are deleted/unlinkable. Try re-fetching.
+          scrolling, or some accounts are deleted. Try re-fetching.
         </p>
       )}
     </div>

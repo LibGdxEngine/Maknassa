@@ -13,14 +13,22 @@ interface SettingsCardProps {
 
 export function SettingsCard({ settings, saveState, onUpdate }: SettingsCardProps) {
   return (
-    <section className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+    <section className="rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[#131926] p-4 shadow-[0_1px_3px_rgba(0,0,0,0.4),0_4px_12px_rgba(0,0,0,0.25)]">
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">Settings</h2>
+        <h2 className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[#4e5d73]">Settings</h2>
         <SaveTick state={saveState} />
       </div>
 
       {settings === null ? (
-        <p className="text-xs text-slate-500">Loading settings…</p>
+        <div className="space-y-2">
+          {[40, 24, 32, 24].map((w, i) => (
+            <div
+              key={i}
+              className="skeleton-pulse h-6 rounded-md bg-[#1a2235]"
+              style={{ width: `${w * 2.5}px` }}
+            />
+          ))}
+        </div>
       ) : (
         <div className="space-y-4">
           <Field label="Profile dir" hint="Where your logged-in browser session is stored.">
@@ -28,26 +36,29 @@ export function SettingsCard({ settings, saveState, onUpdate }: SettingsCardProp
               type="text"
               value={settings.profile_dir}
               onChange={(e) => onUpdate({ profile_dir: e.target.value })}
-              className="w-full rounded-lg border border-white/10 bg-slate-900/60 px-2.5 py-1.5 text-xs text-slate-100 outline-none focus:border-sky-500"
+              className="w-full rounded-[6px] border border-[rgba(255,255,255,0.08)] bg-[#1a2235] px-2.5 py-1.5 text-[11px] font-mono text-[#9aa5b8] outline-none transition focus:border-[rgba(59,130,246,0.5)] focus:ring-1 focus:ring-[rgba(59,130,246,0.2)]"
             />
           </Field>
 
-          <label className="flex cursor-pointer items-center justify-between text-xs text-slate-200">
-            <span>
+          <label className="flex cursor-pointer items-center justify-between gap-3 text-[11px] text-[#9aa5b8]">
+            <span className="leading-snug">
               Headless browser
-              <span className="ml-1 text-slate-500">(off to watch / solve checkpoints)</span>
+              <span className="block text-[10px] text-[#4e5d73]">Off to watch / solve checkpoints</span>
             </span>
-            <input
-              type="checkbox"
-              checked={settings.headless}
-              onChange={(e) => onUpdate({ headless: e.target.checked })}
-              className="h-4 w-4 accent-sky-500"
-            />
+            <div className="relative shrink-0">
+              <input
+                type="checkbox"
+                checked={settings.headless}
+                onChange={(e) => onUpdate({ headless: e.target.checked })}
+                className="mk-check h-4 w-4 rounded accent-[#3b82f6]"
+                aria-label="Headless browser"
+              />
+            </div>
           </label>
 
           <Field
-            label="Seconds between blocks"
-            hint="Random pause keeps blocking human-paced. Lower is faster but riskier."
+            label="Delay between blocks"
+            hint="Random pause keeps blocking human-paced."
           >
             <div className="flex items-center gap-2">
               <NumberInput
@@ -57,7 +68,7 @@ export function SettingsCard({ settings, saveState, onUpdate }: SettingsCardProp
                 onCommit={(v) => onUpdate({ min_delay: v })}
                 ariaLabel="Minimum delay"
               />
-              <span className="text-slate-500">to</span>
+              <span className="text-[11px] text-[#4e5d73]">–</span>
               <NumberInput
                 value={settings.max_delay}
                 min={0}
@@ -65,6 +76,7 @@ export function SettingsCard({ settings, saveState, onUpdate }: SettingsCardProp
                 onCommit={(v) => onUpdate({ max_delay: v })}
                 ariaLabel="Maximum delay"
               />
+              <span className="text-[10px] text-[#4e5d73]">sec</span>
             </div>
           </Field>
 
@@ -84,9 +96,9 @@ export function SettingsCard({ settings, saveState, onUpdate }: SettingsCardProp
 }
 
 function SaveTick({ state }: { state: SaveState }) {
-  if (state === 'saving') return <span className="text-xs text-slate-500">Saving…</span>
-  if (state === 'saved') return <span className="text-xs text-emerald-400">✓ Saved</span>
-  if (state === 'error') return <span className="text-xs text-red-400">Save failed</span>
+  if (state === 'saving') return <span className="text-[10px] text-[#4e5d73]">Saving…</span>
+  if (state === 'saved') return <span className="text-[10px] text-[#34d399]">✓ Saved</span>
+  if (state === 'error') return <span className="text-[10px] text-[#f87171]">Save failed</span>
   return null
 }
 
@@ -100,10 +112,10 @@ function Field({
   children: React.ReactNode
 }) {
   return (
-    <div className="space-y-1">
-      <div className="text-xs font-medium text-slate-300">{label}</div>
+    <div className="space-y-1.5">
+      <div className="text-[11px] font-medium text-[#9aa5b8]">{label}</div>
       {children}
-      {hint && <p className="text-[11px] leading-snug text-slate-500">{hint}</p>}
+      {hint && <p className="text-[10px] leading-snug text-[#4e5d73]">{hint}</p>}
     </div>
   )
 }
@@ -132,7 +144,7 @@ function NumberInput({
         const parsed = Number(e.target.value)
         if (!Number.isNaN(parsed)) onCommit(parsed)
       }}
-      className="w-20 rounded-lg border border-white/10 bg-slate-900/60 px-2.5 py-1.5 text-xs text-slate-100 outline-none focus:border-sky-500"
+      className="w-16 rounded-[6px] border border-[rgba(255,255,255,0.08)] bg-[#1a2235] px-2 py-1.5 text-center text-[11px] font-mono text-[#e8edf5] outline-none transition focus:border-[rgba(59,130,246,0.5)] focus:ring-1 focus:ring-[rgba(59,130,246,0.2)]"
     />
   )
 }

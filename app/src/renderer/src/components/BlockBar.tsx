@@ -113,15 +113,18 @@ export function BlockBar({ selectedCount, selectedUrls, onBusy, onError }: Block
   if (phase.kind === 'idle' && selectedCount === 0) return null
 
   return (
-    <div className="sticky bottom-0 z-40 mt-4 rounded-xl border border-white/10 bg-[#0f1623]/95 p-4 shadow-2xl backdrop-blur">
+    <div className="sticky bottom-4 z-40 mt-4 rounded-[14px] border border-[rgba(255,255,255,0.08)] bg-[#0e1420]/95 p-4 shadow-[0_4px_24px_rgba(0,0,0,0.6),0_1px_4px_rgba(0,0,0,0.4)] backdrop-blur-md">
       {phase.kind === 'idle' && (
         <div className="flex items-center justify-between gap-3">
-          <span className="text-sm text-slate-300">{selectedCount} selected</span>
+          <span className="text-sm text-[#9aa5b8]">
+            <span className="font-semibold tabular-nums text-[#e8edf5]">{selectedCount}</span> selected
+          </span>
           <button
             type="button"
             onClick={() => setPhase({ kind: 'confirm' })}
             disabled={selectedCount === 0}
-            className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+            className="rounded-[8px] bg-[#dc2626] px-4 py-2 text-sm font-semibold text-white transition-all duration-150 hover:bg-[#ef4444] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-[#f87171] focus-visible:outline-offset-2"
+            style={{ backgroundImage: 'linear-gradient(to bottom, rgba(255,255,255,0.07) 0%, transparent 100%)' }}
           >
             Block selected ({selectedCount})
           </button>
@@ -130,21 +133,24 @@ export function BlockBar({ selectedCount, selectedUrls, onBusy, onError }: Block
 
       {phase.kind === 'confirm' && (
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm text-amber-200">
-            This will block {selectedCount} account(s) from your own account, human-paced.
+          <p className="text-sm text-[#fbbf24]">
+            This will block{' '}
+            <span className="font-semibold tabular-nums">{selectedCount}</span>{' '}
+            account(s) from your own account, human-paced.
           </p>
-          <div className="flex gap-2">
+          <div className="flex gap-2 shrink-0">
             <button
               type="button"
               onClick={() => setPhase({ kind: 'idle' })}
-              className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-200 transition hover:border-white/20"
+              className="rounded-[8px] border border-[rgba(255,255,255,0.10)] px-4 py-2 text-sm text-[#9aa5b8] transition hover:border-[rgba(255,255,255,0.20)] hover:text-[#e8edf5] focus-visible:outline-2 focus-visible:outline-[#3b82f6] focus-visible:outline-offset-2"
             >
               Cancel
             </button>
             <button
               type="button"
               onClick={runBlock}
-              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-500"
+              className="rounded-[8px] bg-[#dc2626] px-4 py-2 text-sm font-semibold text-white transition-all hover:bg-[#ef4444] active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-[#f87171] focus-visible:outline-offset-2"
+              style={{ backgroundImage: 'linear-gradient(to bottom, rgba(255,255,255,0.07) 0%, transparent 100%)' }}
             >
               Confirm block ({selectedCount})
             </button>
@@ -155,14 +161,17 @@ export function BlockBar({ selectedCount, selectedUrls, onBusy, onError }: Block
       {phase.kind === 'running' && (
         <div className="space-y-3">
           <div className="flex items-center justify-between gap-3">
-            <span className="text-sm font-medium text-slate-200">
-              Blocking… {phase.done} / {phase.total}
+            <span className="text-sm font-medium text-[#e8edf5]">
+              Blocking…{' '}
+              <span className="font-mono tabular-nums">{phase.done}</span>
+              <span className="text-[#4e5d73]"> / </span>
+              <span className="font-mono tabular-nums text-[#9aa5b8]">{phase.total}</span>
             </span>
             <button
               type="button"
               onClick={requestCancel}
               disabled={phase.cancelling}
-              className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-slate-200 transition hover:border-white/20 disabled:opacity-60"
+              className="rounded-[6px] border border-[rgba(255,255,255,0.10)] px-3 py-1.5 text-xs text-[#9aa5b8] transition hover:border-[rgba(255,255,255,0.20)] hover:text-[#e8edf5] disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-[#3b82f6] focus-visible:outline-offset-1"
             >
               {phase.cancelling ? 'Cancelling…' : 'Cancel'}
             </button>
@@ -188,8 +197,16 @@ export function BlockBar({ selectedCount, selectedUrls, onBusy, onError }: Block
 function ProgressBar({ done, total }: { done: number; total: number }) {
   const pct = total > 0 ? Math.round((done / total) * 100) : 0
   return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800">
-      <div className="h-full rounded-full bg-sky-500 transition-all" style={{ width: `${pct}%` }} />
+    <div className="relative h-2 w-full overflow-hidden rounded-full bg-[#1a2235]">
+      <div
+        className="progress-fill h-full rounded-full bg-gradient-to-r from-[#2563eb] to-[#3b82f6]"
+        style={{ width: `${pct}%` }}
+      />
+      {pct > 0 && (
+        <span className="absolute inset-0 flex items-center justify-end pr-1 text-[9px] font-mono tabular-nums text-[#60a5fa] leading-none">
+          {pct}%
+        </span>
+      )}
     </div>
   )
 }
@@ -205,35 +222,35 @@ function OutcomeList({
 }) {
   if (outcomes.length === 0) return null
   return (
-    <ul className="max-h-60 space-y-1 overflow-y-auto text-xs">
+    <ul className="max-h-56 space-y-1 overflow-y-auto pr-0.5">
       {outcomes.map((o, i) => (
         <li
           key={`${o.profile_key}-${i}`}
-          className="flex items-center gap-2 rounded-lg bg-slate-900/40 px-2.5 py-1.5"
+          className="flex items-center gap-2 rounded-[6px] bg-[#131926] px-2.5 py-1.5 text-xs"
         >
-          <span className="shrink-0">{outcomeIcon(o.status)}</span>
-          <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
+          <span className="shrink-0 text-sm">{outcomeIcon(o.status)}</span>
+          <span className="rounded-[4px] bg-[#1a2235] px-1.5 py-0.5 font-mono text-[10px] text-[#4e5d73]">
             {o.status}
           </span>
           {o.profile_url ? (
             <button
               type="button"
               onClick={() => o.profile_url && window.maknassa.openExternal(o.profile_url)}
-              className="min-w-0 flex-1 truncate text-left text-sky-300 hover:underline"
+              className="min-w-0 flex-1 truncate text-left text-[#60a5fa] hover:underline focus-visible:outline-2 focus-visible:outline-[#3b82f6] focus-visible:outline-offset-1"
               title={o.name ?? o.profile_url}
             >
               {o.name || o.profile_url}
             </button>
           ) : (
-            <span className="min-w-0 flex-1 truncate text-slate-300">{o.name || '(no url)'}</span>
+            <span className="min-w-0 flex-1 truncate text-[#9aa5b8]">{o.name || '(no url)'}</span>
           )}
-          {o.detail && <span className="shrink-0 truncate text-slate-500">— {o.detail}</span>}
+          {o.detail && <span className="shrink-0 truncate text-[10px] text-[#4e5d73]">{o.detail}</span>}
           {onUnblock && o.status === 'blocked' && o.profile_url && (
             <button
               type="button"
               onClick={() => onUnblock(o.profile_url as string, o.profile_key)}
               disabled={unblocking.has(o.profile_key)}
-              className="shrink-0 rounded border border-white/10 px-2 py-0.5 text-[11px] text-slate-200 transition hover:border-white/20 disabled:opacity-60"
+              className="shrink-0 rounded-[4px] border border-[rgba(255,255,255,0.08)] px-2 py-0.5 text-[10px] text-[#9aa5b8] transition hover:border-[rgba(255,255,255,0.16)] hover:text-[#e8edf5] disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-[#3b82f6] focus-visible:outline-offset-1"
             >
               {unblocking.has(o.profile_key) ? 'Unblocking…' : 'Unblock'}
             </button>
@@ -262,16 +279,19 @@ function ResultsView({
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3">
-        <div className="text-sm">
-          <span className="font-semibold text-emerald-300">Blocked: {blocked}</span>
-          <span className="mx-2 text-slate-500">·</span>
-          <span className="text-slate-300">Failed: {failed}</span>
-          {cancelled && <span className="ml-2 text-amber-300">(cancelled)</span>}
+        <div className="flex items-center gap-3 text-sm">
+          <span className="font-semibold text-[#34d399] tabular-nums">
+            ✓ {blocked} blocked
+          </span>
+          {failed > 0 && (
+            <span className="text-[#f87171] tabular-nums">✗ {failed} failed</span>
+          )}
+          {cancelled && <span className="text-[#fbbf24]">(cancelled)</span>}
         </div>
         <button
           type="button"
           onClick={onDone}
-          className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-slate-200 transition hover:border-white/20"
+          className="rounded-[6px] border border-[rgba(255,255,255,0.10)] px-3 py-1.5 text-xs text-[#9aa5b8] transition hover:border-[rgba(255,255,255,0.20)] hover:text-[#e8edf5] focus-visible:outline-2 focus-visible:outline-[#3b82f6] focus-visible:outline-offset-1"
         >
           Done
         </button>

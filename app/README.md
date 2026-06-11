@@ -147,10 +147,8 @@ sudo apt install libfuse2
 
 ### Ubuntu 24.04+ sandbox note
 
-On Ubuntu 24.04+, Chrome sandbox requires either unprivileged user namespaces or the
-`--no-sandbox` flag. electron-builder's AppImage target handles this automatically
-when FUSE is unavailable, but if you see a sandbox error running from source, pass:
-
-```bash
-./Maknassa.AppImage --no-sandbox
-```
+Electron's setuid sandbox helper cannot work from an AppImage (squashfs mounts are
+nosuid) and Ubuntu 24.04+ also blocks the unprivileged-userns fallback, so
+`src/main/index.ts` appends `--no-sandbox` automatically whenever the `APPIMAGE`
+env var is present. The renderer only ever loads the local bundle and the
+localhost API, never remote content, which is what makes that trade acceptable.

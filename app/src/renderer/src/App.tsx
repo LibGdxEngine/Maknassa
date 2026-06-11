@@ -120,35 +120,53 @@ export default function App() {
   const selUrls = urlsForSelection(reactorList, selected)
 
   return (
-    <div className="min-h-screen bg-[#0b0f17] text-slate-100">
+    <div className="h-screen overflow-hidden bg-[#0b0f17] text-[#e8edf5]" style={{ fontFamily: "'DM Sans', 'Geist', ui-sans-serif, system-ui, sans-serif" }}>
       <Toasts toasts={toasts.toasts} onDismiss={toasts.dismiss} />
 
-      <div className="mx-auto flex min-h-screen max-w-[1400px] flex-col lg:flex-row">
+      <div className="mx-auto flex h-full max-w-[1400px] flex-col lg:flex-row">
         {/* Sidebar */}
-        <aside className="w-full shrink-0 space-y-4 border-b border-white/10 bg-[#0d121c] p-5 lg:w-80 lg:border-b-0 lg:border-r">
-          <header>
-            <h1 className="text-xl font-bold tracking-tight">🚫 Maknassa</h1>
-            <p className="mt-1 text-xs text-slate-400">
+        <aside className="flex w-full shrink-0 flex-col overflow-y-auto border-b border-[rgba(255,255,255,0.06)] bg-[#0e1420] p-5 lg:h-full lg:w-[296px] lg:border-b-0 lg:border-r">
+          {/* Brand */}
+          <header className="mb-5 pb-4 border-b border-[rgba(255,255,255,0.06)]">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] bg-[#1a2235] text-[17px] shadow-sm border border-[rgba(255,255,255,0.09)] leading-none">
+                🚫
+              </div>
+              <h1 className="text-[15px] font-semibold tracking-[-0.02em] text-[#e8edf5]">Maknassa</h1>
+            </div>
+            <p className="mt-2 text-[11px] leading-relaxed text-[#4e5d73]">
               Fetch a post&apos;s reactors, then block the ones you pick.
             </p>
           </header>
 
-          <ConnectionCard session={session} onSession={setSession} onBusy={showBusy} />
-          <SettingsCard
-            settings={settings.settings}
-            saveState={settings.saveState}
-            onUpdate={settings.update}
-          />
+          <div className="space-y-3">
+            <ConnectionCard session={session} onSession={setSession} onBusy={showBusy} />
+            <SettingsCard
+              settings={settings.settings}
+              saveState={settings.saveState}
+              onUpdate={settings.update}
+            />
+          </div>
 
-          <div className="pt-1 text-[11px] text-slate-600">
-            {health.kind === 'up' && <span>Backend ok (v{health.version})</span>}
-            {health.kind === 'connecting' && <span>Connecting to backend…</span>}
-            {health.kind === 'down' && <span className="text-red-400">Backend offline</span>}
+          {/* Backend health footer */}
+          <div className="mt-5 pt-4 border-t border-[rgba(255,255,255,0.06)]">
+            <div className="flex items-center gap-1.5">
+              <span className={`h-1.5 w-1.5 rounded-full ${
+                health.kind === 'up' ? 'bg-[#34d399]' :
+                health.kind === 'connecting' ? 'bg-[#fbbf24] animate-pulse' :
+                'bg-[#f87171]'
+              }`} />
+              <span className="text-[11px] text-[#4e5d73]">
+                {health.kind === 'up' && `Backend v${health.version}`}
+                {health.kind === 'connecting' && 'Connecting…'}
+                {health.kind === 'down' && <span className="text-[#f87171]">Backend offline</span>}
+              </span>
+            </div>
           </div>
         </aside>
 
         {/* Main */}
-        <main className="flex-1 space-y-6 p-6">
+        <main className="flex flex-1 flex-col overflow-auto p-6 gap-6 lg:h-full">
           <FetchSection
             reactors={reactors}
             expectedTotal={expectedTotal}
@@ -156,6 +174,12 @@ export default function App() {
             onError={showError}
             onBusy={showBusy}
           />
+
+          {reactors === null && (
+            <div className="flex flex-1 items-center justify-center">
+              <EmptyState />
+            </div>
+          )}
 
           {reactors !== null && reactors.length > 0 && (
             <ReactorGrid
@@ -168,6 +192,10 @@ export default function App() {
             />
           )}
 
+          {reactors !== null && reactors.length === 0 && (
+            <NothingCaptured />
+          )}
+
           <BlockBar
             selectedCount={selCount}
             selectedUrls={selUrls}
@@ -176,6 +204,30 @@ export default function App() {
           />
         </main>
       </div>
+    </div>
+  )
+}
+
+function EmptyState() {
+  return (
+    <div className="flex flex-col items-center text-center">
+      <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-[14px] bg-[#131926] border border-[rgba(255,255,255,0.07)] text-[26px] shadow-[0_4px_16px_rgba(0,0,0,0.4)] leading-none">
+        🔗
+      </div>
+      <p className="text-sm font-medium text-[#9aa5b8]">Paste a post URL above to get started</p>
+      <p className="mt-1 text-[11px] text-[#4e5d73]">Reactors will appear here after fetching</p>
+    </div>
+  )
+}
+
+function NothingCaptured() {
+  return (
+    <div className="flex flex-col items-center justify-center py-16 text-center">
+      <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-[#131926] border border-[rgba(255,255,255,0.06)] text-2xl">
+        🤷
+      </div>
+      <p className="text-sm font-medium text-[#9aa5b8]">No reactors captured</p>
+      <p className="mt-1 text-[11px] text-[#4e5d73]">Facebook returned an empty reactor list for this post.</p>
     </div>
   )
 }

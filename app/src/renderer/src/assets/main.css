@@ -1,1 +1,212 @@
 @import "tailwindcss";
+
+@theme {
+  /* ── Surface ramp (navy/ink) ── */
+  --color-surface-base:    #0b0f17;   /* app bg */
+  --color-surface-subtle:  #0e1420;   /* sidebar bg */
+  --color-surface-raised:  #131926;   /* card bg */
+  --color-surface-float:   #1a2235;   /* elevated card, inputs */
+  --color-surface-overlay: #202b3d;   /* hover states, chips */
+
+  /* ── Borders ── */
+  --color-border-dim:    rgba(255,255,255,0.06);
+  --color-border-muted:  rgba(255,255,255,0.10);
+  --color-border-bright: rgba(255,255,255,0.18);
+
+  /* ── Accent — steel blue ── */
+  --color-accent-dim:    #1d4ed8;
+  --color-accent:        #3b82f6;
+  --color-accent-bright: #60a5fa;
+  --color-accent-wash:   rgba(59,130,246,0.08);
+  --color-accent-border: rgba(59,130,246,0.40);
+
+  /* ── Semantic ── */
+  --color-success:       #34d399;
+  --color-success-wash:  rgba(52,211,153,0.08);
+  --color-success-border:rgba(52,211,153,0.35);
+
+  --color-warning:       #fbbf24;
+  --color-warning-wash:  rgba(251,191,36,0.08);
+  --color-warning-border:rgba(251,191,36,0.35);
+
+  --color-danger:        #f87171;
+  --color-danger-dim:    #dc2626;
+  --color-danger-wash:   rgba(248,113,113,0.08);
+  --color-danger-border: rgba(248,113,113,0.35);
+
+  /* ── Text ── */
+  --color-text-primary:  #e8edf5;
+  --color-text-secondary:#9aa5b8;
+  --color-text-muted:    #4e5d73;
+  --color-text-accent:   var(--color-accent-bright);
+
+  /* ── Typography ── */
+  --font-sans: 'DM Sans', 'Geist', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'DM Mono', 'Geist Mono', ui-monospace, monospace;
+
+  /* ── Radii ── */
+  --radius-sm:  6px;
+  --radius-md:  10px;
+  --radius-lg:  14px;
+  --radius-xl:  18px;
+
+  /* ── Shadows ── */
+  --shadow-card: 0 1px 3px rgba(0,0,0,0.4), 0 4px 12px rgba(0,0,0,0.25);
+  --shadow-float:0 4px 16px rgba(0,0,0,0.5), 0 1px 4px rgba(0,0,0,0.4);
+}
+
+/* ─────────────────────────────────────────────────────
+   Base / root
+───────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-feature-settings: "tnum" 1, "kern" 1;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background-color: var(--color-surface-base);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* ─────────────────────────────────────────────────────
+   Scrollbars
+───────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.12);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.22);
+}
+
+/* ─────────────────────────────────────────────────────
+   Focus-visible rings (global)
+───────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* ─────────────────────────────────────────────────────
+   Skeleton pulse animation
+───────────────────────────────────────────────────── */
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.5; }
+  50%       { opacity: 1; }
+}
+
+.skeleton-pulse {
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+/* ─────────────────────────────────────────────────────
+   Toast slide-in/out
+───────────────────────────────────────────────────── */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+    max-height: 80px;
+    margin-bottom: 0;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(24px);
+    max-height: 0;
+    margin-bottom: -8px;
+  }
+}
+
+.toast-enter {
+  animation: toast-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.toast-exit {
+  animation: toast-out 0.18s ease-in both;
+  overflow: hidden;
+}
+
+/* ─────────────────────────────────────────────────────
+   Progress bar fill transition
+───────────────────────────────────────────────────── */
+.progress-fill {
+  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ─────────────────────────────────────────────────────
+   Reactor card check-tint
+───────────────────────────────────────────────────── */
+.reactor-card {
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease, transform 0.12s ease;
+}
+.reactor-card:hover:not(.reactor-card--selected) {
+  transform: translateY(-1px);
+}
+
+/* ─────────────────────────────────────────────────────
+   Chip / toggle micro-interaction
+───────────────────────────────────────────────────── */
+.chip-toggle {
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+/* ─────────────────────────────────────────────────────
+   Reduce motion: disable all decorative transitions
+───────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ─────────────────────────────────────────────────────
+   Number inputs: hide default spinners
+───────────────────────────────────────────────────── */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+/* ─────────────────────────────────────────────────────
+   Checkbox: style the native checkbox with accent
+───────────────────────────────────────────────────── */
+input[type="checkbox"].mk-check {
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}

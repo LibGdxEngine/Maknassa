@@ -47,8 +47,8 @@ login** — your session never leaves your machine.
 3. Double-click it (or run `./Maknassa.AppImage`).
 
 > **Ubuntu 22.04+ note:** If the AppImage does not launch, install FUSE first:
-> `sudo apt install libfuse2`. On Ubuntu 24.04+, you may also need to pass
-> `--no-sandbox` if unprivileged user namespaces are disabled.
+> `sudo apt install libfuse2`. (Sandbox restrictions on Ubuntu 24.04+ are handled
+> automatically — the app detects it is running from an AppImage.)
 
 Everything is bundled — there is nothing else to install.
 
