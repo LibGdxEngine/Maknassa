@@ -1,0 +1,36 @@
+{
+  "name": "maknassa",
+  "version": "1.0.0",
+  "description": "Maknassa Desktop App",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "npm run typecheck:vite && npm run typecheck:node && npm run typecheck:web",
+    "typecheck:vite": "tsc --noEmit -p tsconfig.vite.json",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
+    "dist": "electron-vite build && electron-builder",
+    "dist:linux": "electron-vite build && electron-builder --linux AppImage"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@electron-toolkit/tsconfig": "^2.0.0",
+    "@electron-toolkit/utils": "^3.0.0",
+    "@tailwindcss/vite": "^4.1.8",
+    "@types/node": "^20.17.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^36.3.1",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^3.1.0",
+    "playwright": "^1.60.0",
+    "tailwindcss": "^4.1.8",
+    "typescript": "^5.7.3",
+    "vite": "^6.3.5"
+  }
+}

@@ -1,0 +1,27 @@
+appId: com.maknassa.app
+productName: Maknassa
+directories:
+  output: ../dist/electron
+npmRebuild: false
+files:
+  - out/**/*
+extraResources:
+  - from: ../dist/maknassa-backend
+    to: backend
+    filter:
+      - "**/*"
+linux:
+  target:
+    - AppImage
+  icon: ../packaging/icons/maknassa.png
+  artifactName: Maknassa.AppImage
+win:
+  target:
+    - nsis
+  icon: ../packaging/icons/maknassa.ico
+  artifactName: Maknassa-Setup.exe
+mac:
+  target:
+    - dmg
+  icon: ../packaging/icons/maknassa.icns
+  artifactName: Maknassa.dmg
