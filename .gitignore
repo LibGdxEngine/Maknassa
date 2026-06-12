@@ -1,3 +1,6 @@
+# Node (app/ deps, plus any stray node_modules npm creates at the repo root)
+node_modules/
+
 # Python
 __pycache__/
 *.py[cod]
