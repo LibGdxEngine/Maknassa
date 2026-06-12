@@ -15,6 +15,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metadata
 
 REPO = Path(SPECPATH).parent  # packaging/ -> repo root
+SHOULD_STRIP = sys.platform != "win32"
 
 datas = []
 binaries = []
@@ -76,7 +77,7 @@ exe = EXE(
     name="maknassa-backend",
     debug=False,
     bootloader_ignore_signals=False,
-    strip=True,
+    strip=SHOULD_STRIP,
     upx=False,
     # console=True keeps stdout alive for the PORT/TOKEN handshake (a windowed
     # build has no stdout on Windows). Electron spawns it with windowsHide so
@@ -88,7 +89,7 @@ coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
-    strip=True,
+    strip=SHOULD_STRIP,
     upx=False,
     name="maknassa-backend",
 )
