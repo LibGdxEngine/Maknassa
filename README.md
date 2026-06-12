@@ -337,7 +337,7 @@ installers can't be cross-compiled, so each OS builds its own (`windows-latest`,
 resulting `.dmg` is native on Apple-Silicon Macs — Intel Macs would need a separate
 `macos-13` build (GitHub's Intel runners are currently backlogged).
 
-Each runner sets up both Python 3.11 and Node 20, runs the relevant build script, then
+Each runner sets up both Python 3.11 and Node 24, runs the relevant build script, then
 attaches the artifact. Two ways to trigger it:
 
 ```bash
