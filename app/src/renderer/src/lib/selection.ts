@@ -21,6 +21,28 @@ export function toggle(selected: ReadonlySet<string>, key: string): Set<string> 
   return next
 }
 
+// Pre-fetch reaction chips: an EMPTY set means "All" (fetch every type). Toggling
+// from empty therefore selects ONLY the clicked type, and completing the full set
+// collapses back to All-mode so the chip state and the payload can never diverge.
+export function toggleFetchType(
+  selected: ReadonlySet<string>,
+  key: string,
+  all: readonly string[]
+): Set<string> {
+  const next = toggle(selected, key)
+  return next.size === all.length ? new Set() : next
+}
+
+// Canonical-ordered reaction_types payload for POST /api/fetch, or null when no
+// subset is active (= fetch all; the field is omitted from the request body).
+export function fetchTypesPayload(
+  selected: ReadonlySet<string>,
+  all: readonly string[]
+): string[] | null {
+  if (selected.size === 0) return null
+  return all.filter((t) => selected.has(t))
+}
+
 // Select all currently-visible keys (union with prior selection so a filtered
 // "select all" never drops selections hidden by the active filter).
 export function selectAll(selected: ReadonlySet<string>, visibleKeys: readonly string[]): Set<string> {

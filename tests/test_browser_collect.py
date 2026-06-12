@@ -18,6 +18,7 @@ from reactions.browser import (
     select_targets,
 )
 from reactions.config import ReactionConfig
+from reactions.selectors import REACTION_LABELS
 
 POST_URL = "https://www.facebook.com/some.page/posts/123456789"
 
@@ -121,6 +122,62 @@ def test_select_targets_falls_back_to_all_then_unknown():
     only_all = [{"index": 0, "aria": "All reactions", "text": "All 50", "alts": []}]
     assert select_targets(only_all) == [(0, "all", 50)]
     assert select_targets([]) == [(-1, "unknown", 0)]  # nothing recognizable
+
+
+def test_select_targets_filters_to_allowed_types():
+    tabs = [
+        {"index": 0, "aria": "All", "text": "All 50", "alts": []},
+        {"index": 1, "aria": "Angry", "text": "Angry 12", "alts": []},
+        {"index": 2, "aria": "Haha", "text": "Haha 8", "alts": []},
+    ]
+    assert select_targets(tabs, {"haha"}) == [(2, "haha", 8)]
+    # The full canonical set narrows nothing.
+    assert select_targets(tabs, set(REACTION_LABELS)) == select_targets(tabs)
+
+
+def test_select_targets_filter_no_match_returns_empty():
+    tabs = [{"index": 1, "aria": "Angry", "text": "Angry 12", "alts": []}]
+    # A legitimate zero ("no reactors of the selected types") -- the 'all'/unknown
+    # fallback must NOT kick in and scrape everything.
+    assert select_targets(tabs, {"love"}) == []
+
+
+def test_select_targets_filter_ignored_without_per_type_tabs():
+    # No per-type tabs -> no types to filter on; scrape the fallback as-is.
+    only_all = [{"index": 0, "aria": "All reactions", "text": "All 50", "alts": []}]
+    assert select_targets(only_all, {"haha"}) == [(0, "all", 50)]
+    assert select_targets([], {"haha"}) == [(-1, "unknown", 0)]
+
+
+def test_select_targets_none_and_empty_allowed_mean_all():
+    tabs = [
+        {"index": 1, "aria": "Angry", "text": "Angry 12", "alts": []},
+        {"index": 2, "aria": "Haha", "text": "Haha 8", "alts": []},
+    ]
+    assert select_targets(tabs, None) == select_targets(tabs)
+    assert select_targets(tabs, ()) == select_targets(tabs)
+
+
+def test_scrape_all_tabs_honors_config_reaction_types(monkeypatch):
+    """The CLI twin threads config.reaction_types into select_targets."""
+    scraper = _scraper()
+    scraper.config.reaction_types = ("haha",)
+    monkeypatch.setattr(
+        "reactions.browser.select_reaction_tab", lambda page, config, index, rtype: True
+    )
+    scraped: list[str] = []
+    monkeypatch.setattr(
+        scraper,
+        "_scrape_active_tab",
+        lambda page, session_id, reaction_type, target: scraped.append(reaction_type) or 0,
+    )
+    tabs = [
+        {"index": 1, "aria": "Angry", "text": "Angry 12", "alts": []},
+        {"index": 2, "aria": "Haha", "text": "Haha 8", "alts": []},
+    ]
+    scraper._scrape_all_tabs(_StubPage(tabs), session_id=1)
+    assert scraped == ["haha"]  # the Angry tab is never scraped
+    assert scraper.stats.per_type_expected == {"haha": 8}
 
 
 def test_warn_on_undercount_flags_large_gaps(caplog):

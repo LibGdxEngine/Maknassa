@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 import reactions.api as api
 from reactions.api import create_app
 from reactions.models import BlockOutcome
+from reactions.selectors import REACTION_LABELS
 from reactions.ui_fetch import FetchResult, UIReactor
 
 TOKEN = "test-token"
@@ -128,6 +129,7 @@ def test_fetch_job_serializes_result(client, monkeypatch):
 
     def fake_fetch(config):
         captured["post_url"] = config.post_url
+        captured["reaction_types"] = config.reaction_types
         return FetchResult(reactors=[reactor], expected_total=3)
 
     monkeypatch.setattr(api, "fetch_reactors", fake_fetch)
@@ -143,6 +145,50 @@ def test_fetch_job_serializes_result(client, monkeypatch):
     assert job["result"]["reactors"][0]["name"] == "Alice"
     assert job["result"]["reactors"][0]["reaction_type"] == "like"
     assert captured["post_url"] == "https://fb/post"
+    assert captured["reaction_types"] is None  # field omitted = fetch all
+
+
+def test_fetch_threads_reaction_types_into_config(client, monkeypatch):
+    captured: dict[str, Any] = {}
+
+    def fake_fetch(config):
+        captured["reaction_types"] = config.reaction_types
+        return FetchResult(reactors=[], expected_total=0)
+
+    monkeypatch.setattr(api, "fetch_reactors", fake_fetch)
+
+    body = {"post_url": "https://fb/post", "reaction_types": ["haha", "love", "haha"]}
+    resp = client.post("/api/fetch", headers=AUTH, json=body)
+    assert resp.status_code == 202
+    _await_done(client, resp.json()["job_id"])
+    assert captured["reaction_types"] == ("haha", "love")  # deduped, order kept
+
+
+def test_fetch_empty_reaction_types_means_all(client, monkeypatch):
+    captured: dict[str, Any] = {}
+
+    def fake_fetch(config):
+        captured["reaction_types"] = config.reaction_types
+        return FetchResult(reactors=[], expected_total=0)
+
+    monkeypatch.setattr(api, "fetch_reactors", fake_fetch)
+
+    body = {"post_url": "https://fb/post", "reaction_types": []}
+    resp = client.post("/api/fetch", headers=AUTH, json=body)
+    assert resp.status_code == 202
+    _await_done(client, resp.json()["job_id"])
+    assert captured["reaction_types"] is None
+
+
+def test_fetch_rejects_unknown_reaction_types(client):
+    body = {"post_url": "https://fb/post", "reaction_types": ["haha", "banana"]}
+    resp = client.post("/api/fetch", headers=AUTH, json=body)
+    assert resp.status_code == 422  # off-Literal value -> validation error, no job
+
+
+def test_reaction_type_literal_matches_canonical_keys():
+    # Guards drift between the API's Literal and selectors.REACTION_LABELS.
+    assert set(get_args(api.ReactionType)) == set(REACTION_LABELS)
 
 
 def test_unknown_job_is_404(client):

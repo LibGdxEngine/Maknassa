@@ -49,10 +49,10 @@ import json
 import logging
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from importlib import metadata
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.responses import JSONResponse
@@ -328,14 +328,19 @@ def _run_login(job: Job, timeout_s: int) -> dict[str, Any]:
     return {"account_id": account_id}
 
 
-def _run_fetch(job: Job, post_url: str) -> dict[str, Any]:
+def _run_fetch(
+    job: Job, post_url: str, reaction_types: Sequence[str] | None = None
+) -> dict[str, Any]:
     """Fetch the post's reactors and return the serialized FetchResult.
 
     Runs to completion (no mid-fetch cancel): the result carries the reactor list
     and Facebook's own ``expected_total`` so the UI can flag an undercount.
+    ``reaction_types`` narrows the fetch to those reaction tabs; empty/None means
+    all of them (mirrors the storage layer's ``reaction_types or None`` idiom).
     """
     settings = _current_settings()
     config = _settings_config(settings, post_url=post_url)
+    config.reaction_types = tuple(dict.fromkeys(reaction_types)) if reaction_types else None
     result = fetch_reactors(config)
     return {"reactors": _jsonify(result.reactors), "expected_total": result.expected_total}
 
@@ -403,8 +408,15 @@ class LoginBody(BaseModel):
     timeout_s: int = 300
 
 
+# Canonical reaction keys, locked to selectors.REACTION_LABELS by a contract test.
+# FastAPI turns an off-list value into a 422 -- no validator needed.
+ReactionType = Literal["like", "love", "care", "haha", "wow", "sad", "angry"]
+
+
 class FetchBody(BaseModel):
     post_url: str
+    # Which reaction tabs to fetch. Omitted/null/[] = all (the default fetch).
+    reaction_types: list[ReactionType] | None = None
 
 
 class ProfileUrlsBody(BaseModel):
@@ -489,7 +501,9 @@ def create_app(token: str) -> FastAPI:
 
     @app.post("/api/fetch", dependencies=auth)
     def post_fetch(body: FetchBody) -> JSONResponse:
-        return _busy_or_submit("fetch", lambda job: _run_fetch(job, body.post_url))
+        return _busy_or_submit(
+            "fetch", lambda job: _run_fetch(job, body.post_url, body.reaction_types)
+        )
 
     @app.post("/api/block", dependencies=auth)
     def post_block(body: ProfileUrlsBody) -> JSONResponse:

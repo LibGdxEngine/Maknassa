@@ -15,6 +15,9 @@ class ReactionConfig:
     # Scroll loop (mirrors the old scraper's expand loop).
     max_idle_rounds: int = 3
     max_scroll_rounds: int = 200
+    # Which reaction tabs to scrape (canonical REACTION_LABELS keys). None = all.
+    # Best-effort: ignored when the dialog exposes no per-type tabs.
+    reaction_types: tuple[str, ...] | None = None
     # Timeouts.
     navigation_timeout_ms: int = 45_000
     settle_timeout_ms: int = 1_200

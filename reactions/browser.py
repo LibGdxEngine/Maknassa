@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -397,11 +397,22 @@ def _tab_to_typed(tab: dict) -> tuple[int, str, int] | None:
     return None
 
 
-def select_targets(tabs: list[dict]) -> list[tuple[int, str, int]]:
+def select_targets(
+    tabs: list[dict], allowed: Collection[str] | None = None
+) -> list[tuple[int, str, int]]:
     """Pure: choose which tabs to scrape -- per-type tabs preferred, else the
-    'All' tab, else a single 'unknown' fallback. No I/O; unit-testable."""
+    'All' tab, else a single 'unknown' fallback. No I/O; unit-testable.
+
+    ``allowed`` (falsy = no filter) keeps only the named per-type tabs. It can
+    only narrow a per-type tab set: an 'all'-only or tab-less dialog exposes no
+    types to filter on, so the fallback is scraped as-is (best-effort).
+    """
     typed = [t for t in map(_tab_to_typed, tabs) if t is not None]
     per_type = [t for t in typed if t[1] != "all"]
+    if per_type and allowed:
+        # An empty result is a legitimate zero ("no reactors of the selected
+        # types") -- never fall through to the 'all'/unknown fallback here.
+        return [t for t in per_type if t[1] in allowed]
     targets = per_type or [t for t in typed if t[1] == "all"]
     return targets or [(-1, "unknown", 0)]
 
@@ -549,7 +560,7 @@ class ReactionScraper:
     def _scrape_all_tabs(self, page: Page, session_id: int, summary_count: int = 0) -> None:
         # Pure target selection (which tabs, in what order, with Facebook's own
         # badge count) is factored into select_targets; here we only drive effects.
-        targets = select_targets(page.evaluate(ENUM_TABS_SCRIPT))
+        targets = select_targets(page.evaluate(ENUM_TABS_SCRIPT), self.config.reaction_types)
         for index, reaction_type, badge in targets:
             if not select_reaction_tab(page, self.config, index, reaction_type):
                 logger.warning("could not activate %s tab (index %d); skipping", reaction_type, index)

@@ -63,6 +63,10 @@ class FetchResult(BaseModel):
     total directly, and the 'unknown' fallback yields 0 (meter hidden). The UI
     compares it to ``len(reactors)`` so a virtualization shortfall is visible rather
     than silent -- the UI twin of :meth:`ReactionScraper._warn_on_undercount`.
+
+    When ``config.reaction_types`` narrowed the tab set, the total covers only the
+    *selected* tabs' badges -- the whole-post summary count spans all types and
+    would read as a permanent false shortfall on a deliberately partial fetch.
     """
 
     reactors: list[UIReactor]
@@ -169,7 +173,9 @@ def fetch_with_page(page: Page, config: ReactionConfig) -> FetchResult:
     so the tab-walking orchestration is unit-testable against a stub page.
     """
     summary_count = open_reactions_dialog(page, config)
-    targets = select_targets(page.evaluate(ENUM_TABS_SCRIPT))
+    tabs = page.evaluate(ENUM_TABS_SCRIPT)
+    all_targets = select_targets(tabs)
+    targets = select_targets(tabs, config.reaction_types)
     locale = page.locator("html").get_attribute("lang")
     per_tab: list[list[UIReactor]] = []
     for index, reaction_type, badge in targets:
@@ -188,8 +194,12 @@ def fetch_with_page(page: Page, config: ReactionConfig) -> FetchResult:
         )
         per_tab.append(build_ui_reactors(config.post_url, reaction_type, locale, rows))
     # Per-type tabs sum to the total; a tab-less "All" dialog has no badges, so fall
-    # back to the count Facebook showed on the summary control we clicked.
-    expected_total = max(sum(badge for _i, _t, badge in targets), summary_count)
+    # back to the count Facebook showed on the summary control we clicked. But when
+    # the reaction-type filter narrowed the tab set, meter against the selected
+    # tabs' badges only -- the summary spans all types and would always fall short.
+    badge_sum = sum(badge for _i, _t, badge in targets)
+    narrowed = bool(config.reaction_types) and targets != all_targets
+    expected_total = badge_sum if narrowed else max(badge_sum, summary_count)
     return FetchResult(reactors=merge_reactors(per_tab), expected_total=expected_total)
 
 

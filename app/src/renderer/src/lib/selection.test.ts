@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
   clearAll,
+  fetchTypesPayload,
   filteredKeys,
   reactionCounts,
   reactionTypes,
   selectAll,
   selectedCount,
   selectedUrls,
-  toggle
+  toggle,
+  toggleFetchType
 } from './selection'
 import type { UIReactor } from './types'
 
@@ -40,6 +42,30 @@ describe('toggle', () => {
     const input = new Set(['a'])
     toggle(input, 'b')
     expect([...input]).toEqual(['a'])
+  })
+})
+
+describe('toggleFetchType / fetchTypesPayload', () => {
+  const ALL = ['like', 'love', 'haha'] as const
+
+  it('toggling from All-mode (empty set) selects only that type', () => {
+    expect([...toggleFetchType(new Set(), 'haha', ALL)]).toEqual(['haha'])
+  })
+
+  it('deselecting the last type returns to All-mode', () => {
+    expect(toggleFetchType(new Set(['haha']), 'haha', ALL).size).toBe(0)
+  })
+
+  it('completing the full set collapses back to All-mode', () => {
+    expect(toggleFetchType(new Set(['like', 'love']), 'haha', ALL).size).toBe(0)
+  })
+
+  it('payload is null in All-mode (field omitted = fetch everything)', () => {
+    expect(fetchTypesPayload(new Set(), ALL)).toBeNull()
+  })
+
+  it('payload lists the subset in canonical order regardless of click order', () => {
+    expect(fetchTypesPayload(new Set(['haha', 'like']), ALL)).toEqual(['like', 'haha'])
   })
 })
 

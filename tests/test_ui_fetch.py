@@ -13,6 +13,7 @@ import pytest
 
 from reactions import ui_fetch
 from reactions.config import ReactionConfig
+from reactions.selectors import REACTION_LABELS
 from reactions.ui_fetch import (
     build_ui_reactors,
     fetch_with_page,
@@ -180,6 +181,7 @@ class _StubPage:
         self._rows_by_index = rows_by_index
         self._lang = lang
         self._active = 0
+        self.clicks: list[int] = []  # tab indices activated, in order
 
     def evaluate(self, script, arg=None):
         from reactions import browser
@@ -197,6 +199,7 @@ class _StubPage:
             return False
         if script is browser.CLICK_TAB_SCRIPT:
             self._active = arg
+            self.clicks.append(arg)
             return True
         if script is browser.TAB_SELECTED_SCRIPT:
             return arg == self._active
@@ -219,9 +222,12 @@ class _StubPage:
         return _StubLocator(self._lang)
 
 
-def _config() -> ReactionConfig:
+def _config(reaction_types: tuple[str, ...] | None = None) -> ReactionConfig:
     return ReactionConfig(
-        post_url=POST_URL, db_path=Path("unused.db"), profile_dir=Path("/tmp/unused")
+        post_url=POST_URL,
+        db_path=Path("unused.db"),
+        profile_dir=Path("/tmp/unused"),
+        reaction_types=reaction_types,
     )
 
 
@@ -240,4 +246,38 @@ def test_fetch_with_page_walks_tabs_and_tags_reaction_types():
     assert by_key["sara.x"].avatar_url == AVATAR_A
     # expected_total = max(sum of per-type badges 1+1, summary count from "summary:5")
     # -> the opener's count wins as the completeness target.
+    assert result.expected_total == 5
+
+
+def test_fetch_with_page_filters_tabs_and_meters_selected_badges_only():
+    rows_by_index = {
+        0: [{"name": "John", "profile_url": "https://www.facebook.com/john.doe.5", "avatar_url": AVATAR_J}],
+        1: [{"name": "Sara", "profile_url": "https://www.facebook.com/sara.x", "avatar_url": AVATAR_A}],
+    }
+    page = _StubPage(rows_by_index)
+    result = fetch_with_page(page, _config(reaction_types=("haha",)))
+    assert [r.profile_key for r in result.reactors] == ["sara.x"]
+    assert page.clicks == [1]  # the Love tab is never activated, let alone scrolled
+    # Metered against the selected tab's badge (Haha 1), NOT the whole-post summary
+    # (5) -- a deliberately partial fetch must not read as a shortfall.
+    assert result.expected_total == 1
+
+
+def test_fetch_with_page_filter_zero_match_is_empty_result():
+    page = _StubPage({})
+    result = fetch_with_page(page, _config(reaction_types=("angry",)))
+    assert result.reactors == []
+    assert result.expected_total == 0
+    assert page.clicks == []  # neither tab activated
+
+
+def test_fetch_with_page_full_set_filter_behaves_like_unfiltered():
+    rows_by_index = {
+        0: [{"name": "John", "profile_url": "https://www.facebook.com/john.doe.5", "avatar_url": AVATAR_J}],
+        1: [{"name": "Sara", "profile_url": "https://www.facebook.com/sara.x", "avatar_url": AVATAR_A}],
+    }
+    page = _StubPage(rows_by_index)
+    result = fetch_with_page(page, _config(reaction_types=tuple(REACTION_LABELS)))
+    assert {r.profile_key for r in result.reactors} == {"john.doe.5", "sara.x"}
+    # Nothing was narrowed, so the summary count still wins as the target.
     assert result.expected_total == 5

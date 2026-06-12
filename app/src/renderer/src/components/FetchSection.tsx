@@ -4,8 +4,8 @@
 import { useState } from 'react'
 import { BusyError } from '../lib/api'
 import { startJob } from '../lib/jobs'
-import { reactionCounts } from '../lib/selection'
-import { reactionEmoji } from '../lib/reactions'
+import { fetchTypesPayload, reactionCounts, toggleFetchType } from '../lib/selection'
+import { REACTION_TYPES, reactionEmoji } from '../lib/reactions'
 import type { FetchResult, UIReactor } from '../lib/types'
 
 interface FetchSectionProps {
@@ -25,6 +25,10 @@ export function FetchSection({
 }: FetchSectionProps) {
   const [postUrl, setPostUrl] = useState('')
   const [running, setRunning] = useState(false)
+  // Reaction types to fetch; an empty set means "All" (the default fetch).
+  const [fetchTypes, setFetchTypes] = useState<Set<string>>(new Set())
+  // Whether the result on screen came from a narrowed fetch (for the empty-state copy).
+  const [lastFetchFiltered, setLastFetchFiltered] = useState(false)
 
   async function fetchReactors(): Promise<void> {
     const url = postUrl.trim()
@@ -32,11 +36,16 @@ export function FetchSection({
       onError('Paste a post URL first.')
       return
     }
+    const types = fetchTypesPayload(fetchTypes, REACTION_TYPES)
     setRunning(true)
     try {
-      const handle = await startJob<FetchResult>('/api/fetch', { post_url: url })
+      const handle = await startJob<FetchResult>(
+        '/api/fetch',
+        types ? { post_url: url, reaction_types: types } : { post_url: url }
+      )
       const job = await handle.promise
       if (job.state === 'done' && job.result) {
+        setLastFetchFiltered(types !== null)
         onResult(job.result)
       } else if (job.state === 'cancelled') {
         onError('Fetch was cancelled.')
@@ -93,6 +102,26 @@ export function FetchSection({
         </button>
       </div>
 
+      {/* Which reaction types to fetch: "All" (empty selection) or a subset. */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[11px] font-medium text-[#4e5d73]">Reactions</span>
+        <FetchTypeChip
+          label="All"
+          active={fetchTypes.size === 0}
+          disabled={running}
+          onClick={() => setFetchTypes(new Set())}
+        />
+        {REACTION_TYPES.map((type) => (
+          <FetchTypeChip
+            key={type}
+            label={`${reactionEmoji(type)} ${type}`}
+            active={fetchTypes.has(type)}
+            disabled={running}
+            onClick={() => setFetchTypes(toggleFetchType(fetchTypes, type, REACTION_TYPES))}
+          />
+        ))}
+      </div>
+
       {/* Skeleton grid while fetching */}
       {running && (
         <div className="space-y-3">
@@ -109,9 +138,38 @@ export function FetchSection({
 
       {/* Summary meter after fetch */}
       {reactors !== null && !running && (
-        <SummaryMeter reactors={reactors} expectedTotal={expectedTotal} />
+        <SummaryMeter reactors={reactors} expectedTotal={expectedTotal} filtered={lastFetchFiltered} />
       )}
     </section>
+  )
+}
+
+function FetchTypeChip({
+  label,
+  active,
+  disabled,
+  onClick
+}: {
+  label: string
+  active: boolean
+  disabled: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={active}
+      className={[
+        'chip-toggle rounded-full border px-2.5 py-1 text-[11px] font-medium focus-visible:outline-2 focus-visible:outline-[#3b82f6] focus-visible:outline-offset-1 disabled:cursor-not-allowed disabled:opacity-50',
+        active
+          ? 'border-[rgba(59,130,246,0.5)] bg-[rgba(59,130,246,0.12)] text-[#60a5fa]'
+          : 'border-[rgba(255,255,255,0.08)] bg-[#131926] text-[#9aa5b8] hover:border-[rgba(255,255,255,0.16)] hover:text-[#e8edf5]'
+      ].join(' ')}
+    >
+      {label}
+    </button>
   )
 }
 
@@ -132,10 +190,12 @@ function SkeletonCard({ delay }: { delay: number }) {
 
 function SummaryMeter({
   reactors,
-  expectedTotal
+  expectedTotal,
+  filtered
 }: {
   reactors: UIReactor[]
   expectedTotal: number
+  filtered: boolean
 }) {
   const captured = reactors.length
   const counts = reactionCounts(reactors)
@@ -146,7 +206,13 @@ function SummaryMeter({
       : `${captured} reactor${captured === 1 ? '' : 's'}`
 
   if (captured === 0 && expectedTotal === 0) {
-    return <p className="text-xs text-[#4e5d73]">No reactors found for that post.</p>
+    return (
+      <p className="text-xs text-[#4e5d73]">
+        {filtered
+          ? 'No reactors found for the selected reaction types.'
+          : 'No reactors found for that post.'}
+      </p>
+    )
   }
 
   return (
