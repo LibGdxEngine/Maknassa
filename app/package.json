@@ -23,7 +23,6 @@
   },
   "devDependencies": {
     "@electron-toolkit/tsconfig": "^2.0.0",
-    "@electron-toolkit/utils": "^3.0.0",
     "@tailwindcss/vite": "^4.1.8",
     "@types/node": "^22.19.21",
     "@types/react": "^18.3.12",

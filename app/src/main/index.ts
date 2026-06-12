@@ -1,9 +1,9 @@
-import { app, BrowserWindow, ipcMain, Notification, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Notification, session, shell } from 'electron'
+import { existsSync } from 'fs'
 import path from 'path'
 import { pathToFileURL } from 'url'
 import { spawnBackend, stopBackend } from './backend'
 import type { BackendHandshake } from './backend'
-import { is } from '@electron-toolkit/utils'
 
 // Electron's setuid sandbox helper cannot work from an AppImage (squashfs mounts
 // nosuid) and Ubuntu 24.04+ also blocks the unprivileged-userns fallback, so a
@@ -28,7 +28,7 @@ const RENDERER_INDEX_URL = pathToFileURL(
 // avatars only from Facebook's image CDN (+ data: URIs the offline fake backend uses).
 // Dev relaxes script/connect rules so Vite's HMR client works.
 function installCsp(): void {
-  const policy = is.dev
+  const policy = !app.isPackaged
     ? "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; " +
       "script-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ws: http://127.0.0.1:* http://localhost:*"
     : "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
@@ -48,11 +48,18 @@ let handshake: BackendHandshake | null = null
 // The live window, so the notify/set-progress IPC handlers can reach it.
 let mainWindow: BrowserWindow | null = null
 
+function resolveIconPath(): string | undefined {
+  const iconFile = process.platform === 'win32'
+    ? 'icon.ico'
+    : process.platform === 'darwin'
+      ? 'icon.icns'
+      : 'icon.png'
+  const candidate = path.join(process.resourcesPath, iconFile)
+  return existsSync(candidate) ? candidate : undefined
+}
+
 function createWindow(hs: BackendHandshake): BrowserWindow {
-  const iconPath = path.join(
-    process.resourcesPath,
-    process.platform === 'win32' ? 'icon.ico' : process.platform === 'darwin' ? 'icon.icns' : 'icon.png'
-  )
+  const iconPath = resolveIconPath()
 
   const win = new BrowserWindow({
     width: 1280,
@@ -92,7 +99,7 @@ function createWindow(hs: BackendHandshake): BrowserWindow {
   // http(s) target. The allowed prefix is the exact dev server or the bundle's
   // index.html — not a bare `file://`, which would match any local path.
   const devUrl = process.env['ELECTRON_RENDERER_URL']
-  const allowedPrefix = is.dev && devUrl ? devUrl : RENDERER_INDEX_URL
+  const allowedPrefix = !app.isPackaged && devUrl ? devUrl : RENDERER_INDEX_URL
   win.webContents.on('will-navigate', (event, url) => {
     if (url === allowedPrefix || url.startsWith(allowedPrefix)) return
     event.preventDefault()
@@ -103,7 +110,7 @@ function createWindow(hs: BackendHandshake): BrowserWindow {
 
   win.on('ready-to-show', () => win.show())
 
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+  if (!app.isPackaged && process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
     win.loadURL(RENDERER_INDEX_URL)
@@ -154,6 +161,11 @@ app.whenReady().then(async () => {
     createWindow(hs)
   } catch (err) {
     console.error('[main] backend failed:', err)
+    const details = err instanceof Error ? (err.stack ?? err.message) : String(err)
+    dialog.showErrorBox(
+      'Maknassa failed to start',
+      `Maknassa could not start its local backend service.\n\n${details}`
+    )
     app.quit()
   }
 })

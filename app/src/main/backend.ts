@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from 'child_process'
 import { app } from 'electron'
+import { existsSync } from 'fs'
 import path from 'path'
 
 export interface BackendHandshake {
@@ -45,12 +46,25 @@ export function spawnBackend(): Promise<BackendHandshake> {
 
     if (cmdEnv) {
       const parts = shellSplit(cmdEnv)
+      if (parts.length === 0) {
+        reject(new Error('MAKNASSA_BACKEND_CMD is set but empty after parsing'))
+        return
+      }
       command = parts[0]
       args = parts.slice(1)
     } else {
       const ext = process.platform === 'win32' ? 'maknassa-backend.exe' : 'maknassa-backend'
       command = path.join(process.resourcesPath, 'backend', ext)
       args = []
+      if (!existsSync(command)) {
+        reject(
+          new Error(
+            `Packaged backend executable not found at ${command}. ` +
+              `resourcesPath=${process.resourcesPath}; platform=${process.platform}`
+          )
+        )
+        return
+      }
     }
 
     args.push('--parent-pid', String(process.pid))

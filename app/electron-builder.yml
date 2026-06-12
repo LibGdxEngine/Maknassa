@@ -20,6 +20,7 @@ win:
   target:
     - nsis
   icon: ../packaging/icons/maknassa.ico
+  signAndEditExecutable: false
   artifactName: Maknassa-Setup.exe
 mac:
   target:

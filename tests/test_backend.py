@@ -116,3 +116,15 @@ def test_apply_frozen_env_points_at_bundled_browsers(monkeypatch, tmp_path):
     monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH")
     backend._apply_frozen_env()
     assert os.environ["PLAYWRIGHT_BROWSERS_PATH"] == str(tmp_path / "ms-playwright")
+
+
+def test_pid_alive_reports_current_process():
+    from reactions import backend
+
+    assert backend._pid_alive(os.getpid()) is True
+
+
+def test_pid_alive_reports_missing_process():
+    from reactions import backend
+
+    assert backend._pid_alive(999_999_999) is False

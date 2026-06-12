@@ -27,6 +27,8 @@ shutdown can hang on in-flight browser work and we want a guaranteed teardown.
 from __future__ import annotations
 
 import argparse
+import ctypes
+from ctypes import wintypes
 import os
 import secrets
 import socket
@@ -43,6 +45,9 @@ _HOST = "127.0.0.1"
 _PORT_ENV = "MAKNASSA_BACKEND_PORT"
 _TOKEN_ENV = "MAKNASSA_BACKEND_TOKEN"
 _WATCHDOG_INTERVAL_S = 2.0
+_SYNCHRONIZE = 0x00100000
+_WAIT_TIMEOUT = 0x00000102
+_ERROR_ACCESS_DENIED = 5
 
 
 def free_port(host: str = _HOST) -> int:
@@ -67,13 +72,31 @@ def make_token() -> str:
 
 
 def _pid_alive(pid: int) -> bool:
-    """Whether ``pid`` is still running, via a psutil-free signal-0 probe.
+    """Whether ``pid`` is still running, via psutil-free OS probes.
 
-    ``os.kill(pid, 0)`` sends no signal but performs the same permission/existence
-    check the kernel would for a real signal: it raises ``ProcessLookupError`` once
-    the process is gone, ``PermissionError`` while it merely belongs to another user
-    (still alive), and returns cleanly when we own it and it lives.
+    On POSIX, ``os.kill(pid, 0)`` sends no signal but performs the same
+    permission/existence check the kernel would for a real signal. On Windows,
+    signal 0 can raise ``OSError(WinError 87)``, so use the process handle API.
     """
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+        handle = kernel32.OpenProcess(_SYNCHRONIZE, False, pid)
+        if not handle:
+            return ctypes.get_last_error() == _ERROR_ACCESS_DENIED
+        try:
+            return kernel32.WaitForSingleObject(handle, 0) == _WAIT_TIMEOUT
+        finally:
+            kernel32.CloseHandle(handle)
+
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
