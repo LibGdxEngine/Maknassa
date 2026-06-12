@@ -6,7 +6,8 @@ import { BusyError } from '../lib/api'
 import { startJob } from '../lib/jobs'
 import { fetchTypesPayload, reactionCounts, toggleFetchType } from '../lib/selection'
 import { REACTION_TYPES, reactionEmoji } from '../lib/reactions'
-import type { FetchResult, UIReactor } from '../lib/types'
+import { notify, setTaskbarProgress } from '../lib/desktop'
+import type { FetchResult, JobProgress, UIReactor } from '../lib/types'
 
 interface FetchSectionProps {
   reactors: UIReactor[] | null
@@ -29,6 +30,8 @@ export function FetchSection({
   const [fetchTypes, setFetchTypes] = useState<Set<string>>(new Set())
   // Whether the result on screen came from a narrowed fetch (for the empty-state copy).
   const [lastFetchFiltered, setLastFetchFiltered] = useState(false)
+  // Live progress streamed by the fetch job (done/total/phase), shown while running.
+  const [progress, setProgress] = useState<JobProgress | null>(null)
 
   async function fetchReactors(): Promise<void> {
     const url = postUrl.trim()
@@ -38,14 +41,26 @@ export function FetchSection({
     }
     const types = fetchTypesPayload(fetchTypes, REACTION_TYPES)
     setRunning(true)
+    setProgress(null)
     try {
       const handle = await startJob<FetchResult>(
         '/api/fetch',
-        types ? { post_url: url, reaction_types: types } : { post_url: url }
+        types ? { post_url: url, reaction_types: types } : { post_url: url },
+        {
+          onUpdate: (job) => {
+            const p = job.progress ?? null
+            setProgress(p)
+            const done = p?.done ?? 0
+            const total = p?.total ?? 0
+            setTaskbarProgress(total > 0 ? done / total : 0)
+          }
+        }
       )
       const job = await handle.promise
       if (job.state === 'done' && job.result) {
         setLastFetchFiltered(types !== null)
+        const n = job.result.reactors.length
+        notify('Fetch finished', `Captured ${n} reactor${n === 1 ? '' : 's'}.`)
         onResult(job.result)
       } else if (job.state === 'cancelled') {
         onError('Fetch was cancelled.')
@@ -60,6 +75,7 @@ export function FetchSection({
       }
     } finally {
       setRunning(false)
+      setTaskbarProgress(-1)
     }
   }
 
@@ -122,12 +138,10 @@ export function FetchSection({
         ))}
       </div>
 
-      {/* Skeleton grid while fetching */}
+      {/* Skeleton grid while fetching, with a live counter once collection starts */}
       {running && (
         <div className="space-y-3">
-          <p className="text-xs text-[#4e5d73]">
-            Opening the post and collecting reactors… (a browser window may open)
-          </p>
+          <FetchProgress progress={progress} />
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {Array.from({ length: 6 }).map((_, i) => (
               <SkeletonCard key={i} delay={i * 0.08} />
@@ -170,6 +184,34 @@ function FetchTypeChip({
     >
       {label}
     </button>
+  )
+}
+
+function FetchProgress({ progress }: { progress: JobProgress | null }) {
+  const done = progress?.done ?? 0
+  // Before the first reactor lands, the browser is still opening the dialog.
+  if (done === 0) {
+    return (
+      <p className="text-xs text-[#4e5d73]">
+        Opening the post and collecting reactors… (a browser window may open)
+      </p>
+    )
+  }
+  const total = progress?.total ?? 0
+  const phase = progress?.phase
+  return (
+    <p className="flex flex-wrap items-center gap-1.5 text-xs text-[#9aa5b8]">
+      <span className="h-3 w-3 rounded-full border-2 border-[#3b82f6] border-t-transparent animate-spin" />
+      <span className="tabular-nums">
+        Collected <span className="font-semibold text-[#e8edf5]">{done}</span>
+        {total > 0 && <span className="text-[#4e5d73]"> of ~{total}</span>} reactors…
+      </span>
+      {phase && (
+        <span className="inline-flex items-center gap-1 rounded-full bg-[#1a2235] px-2 py-0.5 text-[10px] text-[#9aa5b8]">
+          {reactionEmoji(phase)} {phase}
+        </span>
+      )}
+    </p>
   )
 }
 

@@ -12,11 +12,14 @@ export interface Job<R = unknown, P = JobProgress> {
   error: string | null
 }
 
-// Live progress pushed by block/unblock jobs (api._run_block). Fetch/login leave it empty.
+// Live progress pushed by jobs as they run. Block/unblock stream done/total/outcomes
+// (api._run_block); fetch streams done/total/phase (the active reaction tab, or null
+// before the first tab — api._run_fetch); login leaves it empty.
 export interface JobProgress {
   done?: number
   total?: number
   outcomes?: BlockOutcome[]
+  phase?: string | null
 }
 
 // reactions/ui_fetch.py :: UIReactor

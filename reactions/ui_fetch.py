@@ -162,7 +162,11 @@ def merge_reactors(per_tab: list[list[UIReactor]]) -> list[UIReactor]:
     return list(merged.values())
 
 
-def fetch_with_page(page: Page, config: ReactionConfig) -> FetchResult:
+def fetch_with_page(
+    page: Page,
+    config: ReactionConfig,
+    on_progress: Callable[[dict], None] | None = None,
+) -> FetchResult:
     """Open the reactions dialog on an already-navigated ``page`` and collect.
 
     Mirrors :meth:`ReactionScraper._scrape_all_tabs` but stays in memory and keeps
@@ -171,13 +175,33 @@ def fetch_with_page(page: Page, config: ReactionConfig) -> FetchResult:
     and Facebook's own expected total (the sum of the scraped tabs' badge counts) so
     the UI can flag a virtualization shortfall. Separated from :func:`fetch_reactors`
     so the tab-walking orchestration is unit-testable against a stub page.
+
+    ``on_progress``, when given, is called once before the first tab and once after
+    each tab with ``{"done": collected_so_far, "total": expected_total, "phase":
+    reaction_type|None}`` so the UI can show a live "Collected N…" counter during a
+    multi-minute fetch instead of a static skeleton. One person leaves at most one
+    reaction, so per-tab counts sum to ~the merged total -- close enough for a meter.
     """
     summary_count = open_reactions_dialog(page, config)
     tabs = page.evaluate(ENUM_TABS_SCRIPT)
     all_targets = select_targets(tabs)
     targets = select_targets(tabs, config.reaction_types)
     locale = page.locator("html").get_attribute("lang")
+    # Per-type tabs sum to the total; a tab-less "All" dialog has no badges, so fall
+    # back to the count Facebook showed on the summary control we clicked. But when
+    # the reaction-type filter narrowed the tab set, meter against the selected
+    # tabs' badges only -- the summary spans all types and would always fall short.
+    badge_sum = sum(badge for _i, _t, badge in targets)
+    narrowed = bool(config.reaction_types) and targets != all_targets
+    expected_total = badge_sum if narrowed else max(badge_sum, summary_count)
+
+    def emit(done: int, phase: str | None) -> None:
+        if on_progress is not None:
+            on_progress({"done": done, "total": expected_total, "phase": phase})
+
+    emit(0, None)
     per_tab: list[list[UIReactor]] = []
+    collected = 0
     for index, reaction_type, badge in targets:
         if not select_reaction_tab(page, config, index, reaction_type):
             continue
@@ -192,23 +216,22 @@ def fetch_with_page(page: Page, config: ReactionConfig) -> FetchResult:
                 "stableNeeded": config.max_idle_rounds,
             },
         )
-        per_tab.append(build_ui_reactors(config.post_url, reaction_type, locale, rows))
-    # Per-type tabs sum to the total; a tab-less "All" dialog has no badges, so fall
-    # back to the count Facebook showed on the summary control we clicked. But when
-    # the reaction-type filter narrowed the tab set, meter against the selected
-    # tabs' badges only -- the summary spans all types and would always fall short.
-    badge_sum = sum(badge for _i, _t, badge in targets)
-    narrowed = bool(config.reaction_types) and targets != all_targets
-    expected_total = badge_sum if narrowed else max(badge_sum, summary_count)
+        tab_reactors = build_ui_reactors(config.post_url, reaction_type, locale, rows)
+        per_tab.append(tab_reactors)
+        collected += len(tab_reactors)
+        emit(collected, reaction_type)
     return FetchResult(reactors=merge_reactors(per_tab), expected_total=expected_total)
 
 
-def fetch_reactors(config: ReactionConfig) -> FetchResult:
+def fetch_reactors(
+    config: ReactionConfig, on_progress: Callable[[dict], None] | None = None
+) -> FetchResult:
     """Open a fresh logged-in session, navigate to the post, and fetch reactors.
 
     The browser-driving entry point for the UI. Call it through :func:`in_thread`
     so the sync Playwright session never collides with the API server's event loop.
+    ``on_progress`` is forwarded to :func:`fetch_with_page` for the live UI counter.
     """
     with persistent_page(config) as (_context, page):
         navigate(page, config.post_url, config)
-        return fetch_with_page(page, config)
+        return fetch_with_page(page, config, on_progress)

@@ -271,6 +271,20 @@ def test_fetch_with_page_filter_zero_match_is_empty_result():
     assert page.clicks == []  # neither tab activated
 
 
+def test_fetch_with_page_streams_progress_per_tab():
+    rows_by_index = {
+        0: [{"name": "John", "profile_url": "https://www.facebook.com/john.doe.5", "avatar_url": AVATAR_J}],
+        1: [{"name": "Sara", "profile_url": "https://www.facebook.com/sara.x", "avatar_url": AVATAR_A}],
+    }
+    updates: list[dict] = []
+    result = fetch_with_page(_StubPage(rows_by_index), _config(), updates.append)
+    # One emit before the first tab (done=0), then one per tab with a cumulative count.
+    assert updates[0] == {"done": 0, "total": 5, "phase": None}
+    assert updates[-1]["done"] == len(result.reactors) == 2
+    assert [u["phase"] for u in updates] == [None, "love", "haha"]
+    assert all(u["total"] == 5 for u in updates)  # stable expected_total throughout
+
+
 def test_fetch_with_page_full_set_filter_behaves_like_unfiltered():
     rows_by_index = {
         0: [{"name": "John", "profile_url": "https://www.facebook.com/john.doe.5", "avatar_url": AVATAR_J}],

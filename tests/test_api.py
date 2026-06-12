@@ -127,7 +127,7 @@ def test_fetch_job_serializes_result(client, monkeypatch):
     )
     captured: dict[str, Any] = {}
 
-    def fake_fetch(config):
+    def fake_fetch(config, on_progress=None):
         captured["post_url"] = config.post_url
         captured["reaction_types"] = config.reaction_types
         return FetchResult(reactors=[reactor], expected_total=3)
@@ -151,7 +151,7 @@ def test_fetch_job_serializes_result(client, monkeypatch):
 def test_fetch_threads_reaction_types_into_config(client, monkeypatch):
     captured: dict[str, Any] = {}
 
-    def fake_fetch(config):
+    def fake_fetch(config, on_progress=None):
         captured["reaction_types"] = config.reaction_types
         return FetchResult(reactors=[], expected_total=0)
 
@@ -167,7 +167,7 @@ def test_fetch_threads_reaction_types_into_config(client, monkeypatch):
 def test_fetch_empty_reaction_types_means_all(client, monkeypatch):
     captured: dict[str, Any] = {}
 
-    def fake_fetch(config):
+    def fake_fetch(config, on_progress=None):
         captured["reaction_types"] = config.reaction_types
         return FetchResult(reactors=[], expected_total=0)
 
@@ -178,6 +178,21 @@ def test_fetch_empty_reaction_types_means_all(client, monkeypatch):
     assert resp.status_code == 202
     _await_done(client, resp.json()["job_id"])
     assert captured["reaction_types"] is None
+
+
+def test_fetch_streams_progress_into_job(client, monkeypatch):
+    def fake_fetch(config, on_progress=None):
+        # The job's progress callback surfaces the live counter to the poller.
+        assert on_progress is not None
+        on_progress({"done": 7, "total": 10, "phase": "haha"})
+        return FetchResult(reactors=[], expected_total=10)
+
+    monkeypatch.setattr(api, "fetch_reactors", fake_fetch)
+
+    resp = client.post("/api/fetch", headers=AUTH, json={"post_url": "https://fb/post"})
+    job = _await_done(client, resp.json()["job_id"])
+    assert job["progress"]["done"] == 7
+    assert job["progress"]["phase"] == "haha"
 
 
 def test_fetch_rejects_unknown_reaction_types(client):
@@ -299,6 +314,30 @@ def test_block_job_accumulates_progress(client, monkeypatch):
     assert _RecordingBlocker.calls == urls
 
 
+def test_block_dry_run_previews_without_browser(client, monkeypatch):
+    # A blocker that explodes if constructed -- proving dry_run never opens a browser.
+    class _ExplodingBlocker:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("dry_run must not instantiate FacebookBlocker")
+
+    monkeypatch.setattr(api, "FacebookBlocker", _ExplodingBlocker)
+    urls = ["https://www.facebook.com/profile.php?id=100012345", "https://fb/two"]
+
+    resp = client.post(
+        "/api/block", headers=AUTH, json={"profile_urls": urls, "dry_run": True}
+    )
+    assert resp.status_code == 202
+    job = _await_done(client, resp.json()["job_id"])
+
+    assert job["state"] == "done"
+    assert job["progress"]["done"] == job["progress"]["total"] == 2
+    statuses = [o["status"] for o in job["result"]]
+    assert statuses == ["dry_run", "dry_run"]
+    # The numeric id is canonicalized into the profile_key; raw urls survive as-is.
+    assert job["result"][0]["profile_key"] == "100012345"
+    assert job["result"][0]["profile_url"] == urls[0]
+
+
 def test_block_job_honors_stop_after(client, monkeypatch):
     monkeypatch.setattr(api, "FacebookBlocker", _RecordingBlocker)
     # stop_after == 2: only the first two successes are acted on. Zero pacing keeps it fast.
@@ -348,7 +387,7 @@ def test_block_job_cancel_between_items(client, monkeypatch):
 def test_second_browser_job_is_busy_409(client, monkeypatch):
     release = threading.Event()
 
-    def slow_fetch(config):
+    def slow_fetch(config, on_progress=None):
         release.wait(timeout=5)
         return FetchResult(reactors=[], expected_total=0)
 

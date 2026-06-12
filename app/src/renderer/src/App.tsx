@@ -3,10 +3,17 @@
 // selection, filters) and wires the thin feature components together. All async job
 // logic lives in lib/jobs + lib/api; selection math in lib/selection.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { configureApi, get } from './lib/api'
 import { selectedCount as countSelected, selectedUrls as urlsForSelection } from './lib/selection'
-import type { FetchResult, HealthResponse, SessionInfo, UIReactor } from './lib/types'
+import {
+  loadBlocklist,
+  mergeBlocked,
+  removeBlocked,
+  saveBlocklist,
+  type Blocklist
+} from './lib/blocklist'
+import type { BlockOutcome, FetchResult, HealthResponse, SessionInfo, UIReactor } from './lib/types'
 import { ConnectionCard } from './components/ConnectionCard'
 import { SettingsCard } from './components/SettingsCard'
 import { FetchSection } from './components/FetchSection'
@@ -29,6 +36,10 @@ export default function App() {
   const [expectedTotal, setExpectedTotal] = useState(0)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [filters, setFilters] = useState<Set<string>>(new Set())
+  const [search, setSearch] = useState('')
+  // Persistent "already blocked" memory (localStorage), keyed by profile_key.
+  const [blocked, setBlocked] = useState<Blocklist>(() => loadBlocklist())
+  const [hideBlocked, setHideBlocked] = useState(false)
 
   const toasts = useToasts()
   const pushRef = useRef(toasts.push)
@@ -113,11 +124,53 @@ export default function App() {
     setExpectedTotal(result.expected_total)
     setSelected(new Set())
     setFilters(new Set())
+    setSearch('')
+    setHideBlocked(false)
   }, [])
 
   const reactorList = reactors ?? []
   const selCount = countSelected(reactorList, selected)
   const selUrls = urlsForSelection(reactorList, selected)
+  const blockedKeys = useMemo(() => new Set(Object.keys(blocked)), [blocked])
+  // profile_key AND profile_url -> name, so BlockBar's outcome rows (the by-URL block
+  // path returns no name) can show a human label. Built from the whole fetched set.
+  const nameLookup = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const r of reactorList) {
+      if (!r.name) continue
+      m[r.profile_key] = r.name
+      if (r.profile_url) m[r.profile_url] = r.name
+    }
+    return m
+  }, [reactorList])
+  // The block callback can outlive its render by minutes; read the latest names via a
+  // ref so re-fetching mid-block doesn't enrich with a stale mapping.
+  const nameLookupRef = useRef(nameLookup)
+  nameLookupRef.current = nameLookup
+
+  // Record a finished block run into the persistent blocklist. Block outcomes carry no
+  // name (by-URL path), so enrich from the grid's known names before storing.
+  function handleBlocked(outcomes: BlockOutcome[]): void {
+    const now = new Date().toISOString()
+    const lookup = nameLookupRef.current
+    setBlocked((prev) => {
+      const enriched = outcomes.map((o) => ({
+        ...o,
+        name: o.name ?? lookup[o.profile_key] ?? null
+      }))
+      const next = mergeBlocked(prev, enriched, now)
+      saveBlocklist(next)
+      return next
+    })
+  }
+
+  function handleUnblocked(key: string): void {
+    setBlocked((prev) => {
+      const next = removeBlocked(prev, key)
+      if (next !== prev) saveBlocklist(next)
+      return next
+    })
+  }
 
   return (
     <div className="h-screen overflow-hidden bg-[#0b0f17] text-[#e8edf5]" style={{ fontFamily: "'DM Sans', 'Geist', ui-sans-serif, system-ui, sans-serif" }}>
@@ -186,9 +239,14 @@ export default function App() {
               reactors={reactorList}
               selected={selected}
               activeFilters={filters}
+              search={search}
+              blockedKeys={blockedKeys}
+              hideBlocked={hideBlocked}
               selectedCount={selCount}
               onSelectedChange={setSelected}
               onFiltersChange={setFilters}
+              onSearchChange={setSearch}
+              onToggleHideBlocked={() => setHideBlocked((v) => !v)}
             />
           )}
 
@@ -199,6 +257,9 @@ export default function App() {
           <BlockBar
             selectedCount={selCount}
             selectedUrls={selUrls}
+            names={nameLookup}
+            onBlocked={handleBlocked}
+            onUnblocked={handleUnblocked}
             onBusy={showBusy}
             onError={showError}
           />

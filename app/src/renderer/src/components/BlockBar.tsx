@@ -5,12 +5,19 @@
 import { useRef, useState } from 'react'
 import { BusyError } from '../lib/api'
 import { cancelJob, startJob } from '../lib/jobs'
+import { notify, setTaskbarProgress } from '../lib/desktop'
 import { outcomeIcon } from '../lib/reactions'
 import type { BlockOutcome, Job, JobProgress } from '../lib/types'
 
 interface BlockBarProps {
   selectedCount: number
   selectedUrls: string[]
+  // profile_key AND profile_url -> name, so outcome rows (which carry no name from
+  // the by-URL block path) can still show a human label. See App.tsx.
+  names: Record<string, string>
+  // Persist a finished real block run / an individual unblock into the blocklist.
+  onBlocked: (outcomes: BlockOutcome[]) => void
+  onUnblocked: (key: string) => void
   onBusy: () => void
   onError: (message: string) => void
 }
@@ -18,13 +25,23 @@ interface BlockBarProps {
 type Phase =
   | { kind: 'idle' }
   | { kind: 'confirm' }
-  | { kind: 'running'; jobId: string; done: number; total: number; outcomes: BlockOutcome[]; cancelling: boolean }
-  | { kind: 'results'; outcomes: BlockOutcome[]; cancelled: boolean }
+  | { kind: 'running'; jobId: string; done: number; total: number; outcomes: BlockOutcome[]; cancelling: boolean; preview: boolean }
+  | { kind: 'results'; outcomes: BlockOutcome[]; cancelled: boolean; preview: boolean }
 
-export function BlockBar({ selectedCount, selectedUrls, onBusy, onError }: BlockBarProps) {
+export function BlockBar({
+  selectedCount,
+  selectedUrls,
+  names,
+  onBlocked,
+  onUnblocked,
+  onBusy,
+  onError
+}: BlockBarProps) {
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' })
   // Track unblock-in-flight per profile_key so individual rows show a spinner.
   const [unblocking, setUnblocking] = useState<Set<string>>(new Set())
+  // "Preview only" toggle on the confirm step: a dry run rehearses the block.
+  const [preview, setPreview] = useState(false)
   const handleRef = useRef<{ abort(): void } | null>(null)
 
   function readProgress(job: Job<unknown, JobProgress>): {
@@ -36,17 +53,20 @@ export function BlockBar({ selectedCount, selectedUrls, onBusy, onError }: Block
     return { done: p.done ?? 0, total: p.total ?? 0, outcomes: p.outcomes ?? [] }
   }
 
-  async function runBlock(): Promise<void> {
+  async function runBlock(dryRun: boolean): Promise<void> {
     const urls = selectedUrls
     if (urls.length === 0) return
-    setPhase({ kind: 'running', jobId: '', done: 0, total: urls.length, outcomes: [], cancelling: false })
+    setPhase({ kind: 'running', jobId: '', done: 0, total: urls.length, outcomes: [], cancelling: false, preview: dryRun })
     try {
       const handle = await startJob<unknown, JobProgress>(
         '/api/block',
-        { profile_urls: urls },
+        { profile_urls: urls, dry_run: dryRun },
         {
           onUpdate: (job) => {
             const { done, total, outcomes } = readProgress(job)
+            // A preview finishes instantly; only a real, minutes-long block batch
+            // earns a taskbar bar the user can watch from another window.
+            if (!dryRun) setTaskbarProgress(total > 0 ? done / total : 0)
             setPhase((prev) =>
               prev.kind === 'running'
                 ? { ...prev, jobId: job.id, done, total: total || prev.total, outcomes }
@@ -58,9 +78,22 @@ export function BlockBar({ selectedCount, selectedUrls, onBusy, onError }: Block
       handleRef.current = handle
       const job = await handle.promise
       const { outcomes } = readProgress(job)
-      setPhase({ kind: 'results', outcomes, cancelled: job.state === 'cancelled' })
+      if (!dryRun) {
+        setTaskbarProgress(-1)
+        const blocked = outcomes.filter((o) => o.status === 'blocked').length
+        const failed = outcomes.length - blocked
+        notify(
+          'Block finished',
+          `Blocked ${blocked} of ${outcomes.length}${failed ? ` — ${failed} failed` : ''}${
+            job.state === 'cancelled' ? ' (cancelled)' : ''
+          }`
+        )
+        onBlocked(outcomes) // persists the 'blocked' ones into the blocklist
+      }
+      setPhase({ kind: 'results', outcomes, cancelled: job.state === 'cancelled', preview: dryRun })
     } catch (err) {
       handleRef.current = null
+      if (!dryRun) setTaskbarProgress(-1)
       if (err instanceof BusyError) {
         onBusy()
         setPhase({ kind: 'idle' })
@@ -87,6 +120,7 @@ export function BlockBar({ selectedCount, selectedUrls, onBusy, onError }: Block
       const handle = await startJob<unknown, JobProgress>('/api/unblock', { profile_urls: [url] })
       const job = await handle.promise
       const last = (job.progress?.outcomes ?? []).at(-1)
+      if (last?.status === 'unblocked') onUnblocked(key) // drop from the blocklist
       setPhase((prev) => {
         if (prev.kind !== 'results') return prev
         const outcomes = prev.outcomes.map((o) =>
@@ -108,6 +142,7 @@ export function BlockBar({ selectedCount, selectedUrls, onBusy, onError }: Block
 
   function reset(): void {
     setPhase({ kind: 'idle' })
+    setPreview(false) // a fresh selection starts as a real block, not a preview
   }
 
   if (phase.kind === 'idle' && selectedCount === 0) return null
@@ -133,11 +168,32 @@ export function BlockBar({ selectedCount, selectedUrls, onBusy, onError }: Block
 
       {phase.kind === 'confirm' && (
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm text-[#fbbf24]">
-            This will block{' '}
-            <span className="font-semibold tabular-nums">{selectedCount}</span>{' '}
-            account(s) from your own account, human-paced.
-          </p>
+          <div className="space-y-2">
+            <p className="text-sm text-[#fbbf24]">
+              {preview ? (
+                <>
+                  Preview which{' '}
+                  <span className="font-semibold tabular-nums">{selectedCount}</span>{' '}
+                  account(s) would be blocked — nothing is changed.
+                </>
+              ) : (
+                <>
+                  This will block{' '}
+                  <span className="font-semibold tabular-nums">{selectedCount}</span>{' '}
+                  account(s) from your own account, human-paced.
+                </>
+              )}
+            </p>
+            <label className="flex w-fit cursor-pointer items-center gap-2 text-[11px] text-[#9aa5b8] select-none">
+              <input
+                type="checkbox"
+                checked={preview}
+                onChange={(e) => setPreview(e.target.checked)}
+                className="h-3.5 w-3.5 accent-[#3b82f6]"
+              />
+              Preview only — don&apos;t actually block
+            </label>
+          </div>
           <div className="flex gap-2 shrink-0">
             <button
               type="button"
@@ -148,11 +204,16 @@ export function BlockBar({ selectedCount, selectedUrls, onBusy, onError }: Block
             </button>
             <button
               type="button"
-              onClick={runBlock}
-              className="rounded-[8px] bg-[#dc2626] px-4 py-2 text-sm font-semibold text-white transition-all hover:bg-[#ef4444] active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-[#f87171] focus-visible:outline-offset-2"
+              onClick={() => runBlock(preview)}
+              className={[
+                'rounded-[8px] px-4 py-2 text-sm font-semibold text-white transition-all active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2',
+                preview
+                  ? 'bg-[#2563eb] hover:bg-[#3b82f6] focus-visible:outline-[#3b82f6]'
+                  : 'bg-[#dc2626] hover:bg-[#ef4444] focus-visible:outline-[#f87171]'
+              ].join(' ')}
               style={{ backgroundImage: 'linear-gradient(to bottom, rgba(255,255,255,0.07) 0%, transparent 100%)' }}
             >
-              Confirm block ({selectedCount})
+              {preview ? `Preview (${selectedCount})` : `Confirm block (${selectedCount})`}
             </button>
           </div>
         </div>
@@ -162,7 +223,7 @@ export function BlockBar({ selectedCount, selectedUrls, onBusy, onError }: Block
         <div className="space-y-3">
           <div className="flex items-center justify-between gap-3">
             <span className="text-sm font-medium text-[#e8edf5]">
-              Blocking…{' '}
+              {phase.preview ? 'Previewing…' : 'Blocking…'}{' '}
               <span className="font-mono tabular-nums">{phase.done}</span>
               <span className="text-[#4e5d73]"> / </span>
               <span className="font-mono tabular-nums text-[#9aa5b8]">{phase.total}</span>
@@ -177,7 +238,7 @@ export function BlockBar({ selectedCount, selectedUrls, onBusy, onError }: Block
             </button>
           </div>
           <ProgressBar done={phase.done} total={phase.total} />
-          <OutcomeList outcomes={phase.outcomes} unblocking={unblocking} />
+          <OutcomeList outcomes={phase.outcomes} names={names} unblocking={unblocking} />
         </div>
       )}
 
@@ -185,8 +246,12 @@ export function BlockBar({ selectedCount, selectedUrls, onBusy, onError }: Block
         <ResultsView
           outcomes={phase.outcomes}
           cancelled={phase.cancelled}
+          preview={phase.preview}
+          liveCount={selectedCount}
+          names={names}
           unblocking={unblocking}
           onUnblock={unblockOne}
+          onBlockForReal={() => runBlock(false)}
           onDone={reset}
         />
       )}
@@ -211,19 +276,31 @@ function ProgressBar({ done, total }: { done: number; total: number }) {
   )
 }
 
+// A human label for an outcome row. The by-URL block path returns no name, so fall
+// back to the name the grid knew for this profile_key/url before showing the raw url.
+function outcomeLabel(o: BlockOutcome, names: Record<string, string>): string {
+  return (
+    o.name || names[o.profile_key] || names[o.profile_url ?? ''] || o.profile_url || '(no url)'
+  )
+}
+
 function OutcomeList({
   outcomes,
+  names,
   unblocking,
   onUnblock
 }: {
   outcomes: BlockOutcome[]
+  names: Record<string, string>
   unblocking: Set<string>
   onUnblock?: (url: string, key: string) => void
 }) {
   if (outcomes.length === 0) return null
   return (
     <ul className="max-h-56 space-y-1 overflow-y-auto pr-0.5">
-      {outcomes.map((o, i) => (
+      {outcomes.map((o, i) => {
+        const label = outcomeLabel(o, names)
+        return (
         <li
           key={`${o.profile_key}-${i}`}
           className="flex items-center gap-2 rounded-[6px] bg-[#131926] px-2.5 py-1.5 text-xs"
@@ -237,12 +314,12 @@ function OutcomeList({
               type="button"
               onClick={() => o.profile_url && window.maknassa.openExternal(o.profile_url)}
               className="min-w-0 flex-1 truncate text-left text-[#60a5fa] hover:underline focus-visible:outline-2 focus-visible:outline-[#3b82f6] focus-visible:outline-offset-1"
-              title={o.name ?? o.profile_url}
+              title={label}
             >
-              {o.name || o.profile_url}
+              {label}
             </button>
           ) : (
-            <span className="min-w-0 flex-1 truncate text-[#9aa5b8]">{o.name || '(no url)'}</span>
+            <span className="min-w-0 flex-1 truncate text-[#9aa5b8]">{label}</span>
           )}
           {o.detail && <span className="shrink-0 truncate text-[10px] text-[#4e5d73]">{o.detail}</span>}
           {onUnblock && o.status === 'blocked' && o.profile_url && (
@@ -256,7 +333,8 @@ function OutcomeList({
             </button>
           )}
         </li>
-      ))}
+        )
+      })}
     </ul>
   )
 }
@@ -264,14 +342,22 @@ function OutcomeList({
 function ResultsView({
   outcomes,
   cancelled,
+  preview,
+  liveCount,
+  names,
   unblocking,
   onUnblock,
+  onBlockForReal,
   onDone
 }: {
   outcomes: BlockOutcome[]
   cancelled: boolean
+  preview: boolean
+  liveCount: number
+  names: Record<string, string>
   unblocking: Set<string>
   onUnblock: (url: string, key: string) => void
+  onBlockForReal: () => void
   onDone: () => void
 }) {
   const blocked = outcomes.filter((o) => o.status === 'blocked').length
@@ -280,23 +366,43 @@ function ResultsView({
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 text-sm">
-          <span className="font-semibold text-[#34d399] tabular-nums">
-            ✓ {blocked} blocked
-          </span>
-          {failed > 0 && (
-            <span className="text-[#f87171] tabular-nums">✗ {failed} failed</span>
+          {preview ? (
+            <span className="font-semibold text-[#60a5fa] tabular-nums">
+              👁️ {outcomes.length} would be blocked
+            </span>
+          ) : (
+            <>
+              <span className="font-semibold text-[#34d399] tabular-nums">
+                ✓ {blocked} blocked
+              </span>
+              {failed > 0 && (
+                <span className="text-[#f87171] tabular-nums">✗ {failed} failed</span>
+              )}
+            </>
           )}
           {cancelled && <span className="text-[#fbbf24]">(cancelled)</span>}
         </div>
-        <button
-          type="button"
-          onClick={onDone}
-          className="rounded-[6px] border border-[rgba(255,255,255,0.10)] px-3 py-1.5 text-xs text-[#9aa5b8] transition hover:border-[rgba(255,255,255,0.20)] hover:text-[#e8edf5] focus-visible:outline-2 focus-visible:outline-[#3b82f6] focus-visible:outline-offset-1"
-        >
-          Done
-        </button>
+        <div className="flex shrink-0 gap-2">
+          {preview && !cancelled && liveCount > 0 && (
+            <button
+              type="button"
+              onClick={onBlockForReal}
+              className="rounded-[6px] bg-[#dc2626] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#ef4444] active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-[#f87171] focus-visible:outline-offset-1"
+              style={{ backgroundImage: 'linear-gradient(to bottom, rgba(255,255,255,0.07) 0%, transparent 100%)' }}
+            >
+              Block for real ({liveCount})
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onDone}
+            className="rounded-[6px] border border-[rgba(255,255,255,0.10)] px-3 py-1.5 text-xs text-[#9aa5b8] transition hover:border-[rgba(255,255,255,0.20)] hover:text-[#e8edf5] focus-visible:outline-2 focus-visible:outline-[#3b82f6] focus-visible:outline-offset-1"
+          >
+            Done
+          </button>
+        </div>
       </div>
-      <OutcomeList outcomes={outcomes} unblocking={unblocking} onUnblock={onUnblock} />
+      <OutcomeList outcomes={outcomes} names={names} unblocking={unblocking} onUnblock={onUnblock} />
     </div>
   )
 }

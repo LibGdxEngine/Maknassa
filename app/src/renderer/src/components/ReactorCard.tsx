@@ -8,6 +8,7 @@ import type { UIReactor } from '../lib/types'
 interface ReactorCardProps {
   reactor: UIReactor
   selected: boolean
+  blocked?: boolean
   onToggle: () => void
 }
 
@@ -21,7 +22,7 @@ function initials(name: string | null): string {
     .join('')
 }
 
-export function ReactorCard({ reactor, selected, onToggle }: ReactorCardProps) {
+export function ReactorCard({ reactor, selected, blocked = false, onToggle }: ReactorCardProps) {
   const [imgFailed, setImgFailed] = useState(false)
   const name = reactor.name || '(no name)'
   const showImg = reactor.avatar_url && !imgFailed
@@ -44,6 +45,7 @@ export function ReactorCard({ reactor, selected, onToggle }: ReactorCardProps) {
         selected
           ? 'reactor-card--selected border-[rgba(59,130,246,0.5)] bg-[rgba(59,130,246,0.08)] shadow-[inset_3px_0_0_#3b82f6,0_1px_3px_rgba(0,0,0,0.4)]'
           : 'border-[rgba(255,255,255,0.06)] bg-[#131926] hover:border-[rgba(255,255,255,0.13)] hover:bg-[#161e2e] shadow-[0_1px_3px_rgba(0,0,0,0.3)]',
+        blocked && !selected ? 'opacity-60' : '',
       ].join(' ')}
     >
       {/* Custom checkbox indicator */}
@@ -98,10 +100,20 @@ export function ReactorCard({ reactor, selected, onToggle }: ReactorCardProps) {
             {name}
           </span>
         )}
-        <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-[#1a2235] px-2 py-0.5 text-[10px] text-[#9aa5b8] leading-tight">
-          {reactionEmoji(reactor.reaction_type)}
-          <span>{reactor.reaction_type}</span>
-        </span>
+        <div className="mt-1 flex flex-wrap items-center gap-1">
+          <span className="inline-flex items-center gap-1 rounded-full bg-[#1a2235] px-2 py-0.5 text-[10px] text-[#9aa5b8] leading-tight">
+            {reactionEmoji(reactor.reaction_type)}
+            <span>{reactor.reaction_type}</span>
+          </span>
+          {blocked && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full border border-[rgba(248,113,113,0.35)] bg-[rgba(248,113,113,0.10)] px-2 py-0.5 text-[10px] font-medium text-[#f87171] leading-tight"
+              title="You blocked this person in an earlier run"
+            >
+              🚫 blocked
+            </span>
+          )}
+        </div>
       </div>
     </div>
   )

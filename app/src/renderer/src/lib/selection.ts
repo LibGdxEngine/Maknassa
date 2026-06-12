@@ -3,12 +3,21 @@
 
 import type { UIReactor } from './types'
 
-// Profile keys currently visible under the active reaction-type filters. An empty
-// filter set means "no filter" -> every reactor is visible (mirrors the Streamlit
-// grid showing all reactors with no per-type narrowing).
-export function filteredKeys(reactors: UIReactor[], activeTypes: ReadonlySet<string>): string[] {
-  if (activeTypes.size === 0) return reactors.map((r) => r.profile_key)
-  return reactors.filter((r) => activeTypes.has(r.reaction_type)).map((r) => r.profile_key)
+// Profile keys currently visible under the active reaction-type filters and an
+// optional case-insensitive name query. An empty filter set means "no type filter"
+// and a blank query means "no name filter" -> with both empty, every reactor is
+// visible. This is the single visibility choke point, so Select all / Deselect all
+// (which operate on visible keys) compose with both filters for free.
+export function filteredKeys(
+  reactors: UIReactor[],
+  activeTypes: ReadonlySet<string>,
+  query = ''
+): string[] {
+  const needle = query.trim().toLowerCase()
+  return reactors
+    .filter((r) => activeTypes.size === 0 || activeTypes.has(r.reaction_type))
+    .filter((r) => needle === '' || (r.name ?? '').toLowerCase().includes(needle))
+    .map((r) => r.profile_key)
 }
 
 export function toggle(selected: ReadonlySet<string>, key: string): Set<string> {

@@ -61,6 +61,8 @@ from pydantic import BaseModel, Field
 from reactions import paths
 from reactions.browser import login_flow
 from reactions.config import ReactionConfig
+from reactions.models import BlockOutcome
+from reactions.selectors import extract_profile_id
 from reactions.service import FacebookBlocker, human_delay, session_config
 from reactions.ui_fetch import fetch_reactors, in_thread
 
@@ -341,11 +343,18 @@ def _run_fetch(
     settings = _current_settings()
     config = _settings_config(settings, post_url=post_url)
     config.reaction_types = tuple(dict.fromkeys(reaction_types)) if reaction_types else None
-    result = fetch_reactors(config)
+
+    def on_progress(update: dict[str, Any]) -> None:
+        # Runs on this job thread (no event loop); the poller reads job.progress.
+        job.progress.update(update)
+
+    result = fetch_reactors(config, on_progress)
     return {"reactors": _jsonify(result.reactors), "expected_total": result.expected_total}
 
 
-def _run_block(job: Job, profile_urls: list[str], *, unblock: bool) -> list[Any]:
+def _run_block(
+    job: Job, profile_urls: list[str], *, unblock: bool, dry_run: bool = False
+) -> list[Any]:
     """Block/unblock each profile in ONE persistent session, streaming progress.
 
     Uses ``FacebookBlocker`` item-by-item (one browser session for the whole
@@ -355,14 +364,33 @@ def _run_block(job: Job, profile_urls: list[str], *, unblock: bool) -> list[Any]
     final list). It replicates ``run_batch``'s safety semantics: the human pause
     between *successful* actions, ``stop_after`` as a per-run cap (0 = unlimited),
     and the cancel flag checked *between* items.
-    """
-    settings = _current_settings()
-    config = _settings_config(settings)
-    cap = config.daily_cap  # already clamped >= 0 by _coerce_settings (0 = unlimited)
 
+    ``dry_run`` short-circuits before any browser work: it streams one ``dry_run``
+    outcome per URL so the UI can rehearse exactly which profiles would be acted on.
+    No cap applies -- a preview lists the full selection.
+    """
     total = len(profile_urls)
     outcomes: list[Any] = []
     job.progress.update({"done": 0, "total": total, "outcomes": outcomes})
+
+    if dry_run:
+        for index, url in enumerate(profile_urls):
+            if job.cancel_requested:
+                break
+            outcome = BlockOutcome(
+                profile_key=extract_profile_id(url) or url,
+                name=None,
+                profile_url=url,
+                status="dry_run",
+                detail="preview",
+            )
+            outcomes.append(_jsonify(outcome))
+            job.progress["done"] = index + 1
+        return outcomes
+
+    settings = _current_settings()
+    config = _settings_config(settings)
+    cap = config.daily_cap  # already clamped >= 0 by _coerce_settings (0 = unlimited)
 
     succeeded = 0
     with FacebookBlocker(
@@ -421,6 +449,12 @@ class FetchBody(BaseModel):
 
 class ProfileUrlsBody(BaseModel):
     profile_urls: list[str] = Field(default_factory=list)
+
+
+class BlockBody(ProfileUrlsBody):
+    # Preview only: list who *would* be blocked without opening a browser. Lives on
+    # the block body alone -- /api/unblock has no preview, so its schema omits it.
+    dry_run: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -506,13 +540,15 @@ def create_app(token: str) -> FastAPI:
         )
 
     @app.post("/api/block", dependencies=auth)
-    def post_block(body: ProfileUrlsBody) -> JSONResponse:
+    def post_block(body: BlockBody) -> JSONResponse:
         return _busy_or_submit(
-            "block", lambda job: _run_block(job, body.profile_urls, unblock=False)
+            "block",
+            lambda job: _run_block(job, body.profile_urls, unblock=False, dry_run=body.dry_run),
         )
 
     @app.post("/api/unblock", dependencies=auth)
     def post_unblock(body: ProfileUrlsBody) -> JSONResponse:
+        # The UI only previews blocks, never unblocks; ignore dry_run on this path.
         return _busy_or_submit(
             "unblock", lambda job: _run_block(job, body.profile_urls, unblock=True)
         )

@@ -77,6 +77,25 @@ describe('filteredKeys', () => {
   it('narrows to keys matching the active reaction types', () => {
     expect(filteredKeys(reactors, new Set(['like']))).toEqual(['a', 'c'])
   })
+
+  it('narrows to a case-insensitive name substring query', () => {
+    // reactor('a',…) -> name "Name a"; query is matched against name only.
+    expect(filteredKeys(reactors, new Set(), 'NAME B')).toEqual(['b'])
+    expect(filteredKeys(reactors, new Set(), 'name')).toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  it('a blank or whitespace query is treated as no name filter', () => {
+    expect(filteredKeys(reactors, new Set(), '   ')).toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  it('composes the type filter AND the name query', () => {
+    // like-type {a,c} intersected with the name "Name a" -> just a.
+    expect(filteredKeys(reactors, new Set(['like']), 'name a')).toEqual(['a'])
+  })
+
+  it('matches nothing when no name contains the query', () => {
+    expect(filteredKeys(reactors, new Set(), 'zzz')).toEqual([])
+  })
 })
 
 describe('selectAll / clearAll', () => {

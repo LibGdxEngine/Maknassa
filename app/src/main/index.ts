@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, Notification, session, shell } from 'electron'
 import path from 'path'
 import { pathToFileURL } from 'url'
 import { spawnBackend, stopBackend } from './backend'
@@ -45,6 +45,8 @@ function installCsp(): void {
 }
 
 let handshake: BackendHandshake | null = null
+// The live window, so the notify/set-progress IPC handlers can reach it.
+let mainWindow: BrowserWindow | null = null
 
 function createWindow(hs: BackendHandshake): BrowserWindow {
   const iconPath = path.join(
@@ -73,6 +75,10 @@ function createWindow(hs: BackendHandshake): BrowserWindow {
   })
 
   handshake = hs
+  mainWindow = win
+  win.on('closed', () => {
+    if (mainWindow === win) mainWindow = null
+  })
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://') || url.startsWith('http://')) {
@@ -120,6 +126,23 @@ ipcMain.handle('open-external', (_event, url: string) => {
     return shell.openExternal(url)
   }
   return Promise.resolve()
+})
+
+// Notify only when the window is NOT focused — a notification for something the user
+// is already watching is just noise. A long block batch is exactly when they alt-tab.
+ipcMain.handle('notify', (_event, payload: { title?: unknown; body?: unknown }) => {
+  if (mainWindow?.isFocused()) return
+  if (!Notification.isSupported()) return
+  const title = typeof payload?.title === 'string' ? payload.title : 'Maknassa'
+  const body = typeof payload?.body === 'string' ? payload.body : ''
+  new Notification({ title, body }).show()
+})
+
+// Taskbar/dock progress. 0..1 fills it; a negative value clears it (setProgressBar(-1)).
+ipcMain.handle('set-progress', (_event, fraction: unknown) => {
+  if (!mainWindow) return
+  const n = typeof fraction === 'number' && Number.isFinite(fraction) ? fraction : -1
+  mainWindow.setProgressBar(n < 0 ? -1 : Math.min(1, Math.max(0, n)))
 })
 
 app.whenReady().then(async () => {

@@ -22,8 +22,10 @@ export function reactionEmoji(reactionType: string): string {
   return REACTION_EMOJI[reactionType] ?? FALLBACK_EMOJI
 }
 
-// Icon per BlockOutcome.status: a success (blocked / unblocked) vs anything else.
+// Icon per BlockOutcome.status: success, preview, skip, or failure.
 export function outcomeIcon(status: string): string {
   if (status === 'blocked' || status === 'unblocked') return '✅'
+  if (status === 'dry_run') return '👁️'
+  if (status === 'skipped') return '⏭️'
   return '❌'
 }
